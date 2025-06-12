@@ -17,8 +17,9 @@ def setup_config_and_paths(args) -> SimpleNamespace:
     Returns:
         Configured config object with resume_checkpoint_path and output_dir set
     """
-    # Load initial config
-    config = load_config(args.config) 
+    # Load initial config with optional dataset config
+    dataset_config_name = getattr(args, 'dataset', None)
+    config = load_config(args.config, dataset_config_name=dataset_config_name) 
     
     # Initialize parameters to set up
     resume_checkpoint_path = None
@@ -71,7 +72,7 @@ def setup_config_and_paths(args) -> SimpleNamespace:
             
             if os.path.exists(previous_config_path):
                 print(f"Loading previous config from: {previous_config_path}")
-                config = load_config(previous_config_path)
+                config = load_config(previous_config_path, dataset_config_name=dataset_config_name)
                 print("Successfully loaded previous config")
             else:
                 print(f"Warning: Previous config file not found at {previous_config_path}")

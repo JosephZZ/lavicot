@@ -13,9 +13,9 @@ from datasets import load_dataset
 
 # Path is handled by pytest configuration
 
-from lavicot.utils.model_utils import setup_model_and_tokenizer, setup_prefix_generator
-from lavicot.training.data_utils import prepare_batch
-from lavicot.config.config_loader import load_config
+from src.lavicot.models.base_model_integration import setup_model_and_tokenizer, setup_prefix_generator
+from src.lavicot.utils.data_utils import prepare_batch
+from src.lavicot.config.config_loader import load_config
 
 def test_base_model():
     """Test 1: Base model generates meaningful text without modifications."""

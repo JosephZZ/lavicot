@@ -7,7 +7,7 @@ import os
 
 # Path is handled by pytest configuration
 
-from lavicot.models.lavicot_bias import TestTimePrefixModel, create_test_time_prefix_config
+from src.lavicot.models.lavicot_bias import TestTimePrefixModel, create_test_time_prefix_config
 
 
 class TestLaViCotModels:

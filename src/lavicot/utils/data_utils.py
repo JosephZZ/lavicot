@@ -1,7 +1,12 @@
-from typing import Dict, List, Tuple, Optional, Callable
+from typing import Dict, List, Tuple, Optional, Callable, Any
 from transformers import PreTrainedTokenizer
 import torch
 import random
+from datasets import load_dataset, Dataset
+from datasets.dataset_dict import DatasetDict
+from types import SimpleNamespace
+import random
+
 
 # Load and prep dataset
 SYSTEM_PROMPT = """
@@ -169,3 +174,59 @@ def prepare_batch(
         return batch_inputs, question_token_lengths
     else:
         return batch_inputs
+    
+
+def prepare_datasets_and_samples(config: SimpleNamespace) -> Tuple[List[int], List[Dict], List[Dict], Any, Any]:
+    """Load datasets and prepare training/evaluation samples.
+    
+    Args:
+        config: Training configuration
+        
+    Returns:
+        Tuple of (train_indices, eval_instances, full_eval_instances, train_dataset, val_dataset)
+    """
+    # Load dataset
+    print("Loading dataset...")
+    dataset = load_dataset(config.dataset_name, config.dataset_config)
+    
+    # Check if we need to split the training data
+    train_val_split_ratio = getattr(config, 'train_val_split_ratio', None)
+    
+    if train_val_split_ratio is not None:
+        # Dataset only has train split, need to create train/test split
+        print(f"Splitting training dataset with ratio {train_val_split_ratio} for validation")
+        full_train_dataset = dataset["train"]
+        
+        # Split the dataset
+        split_dataset = full_train_dataset.train_test_split(
+            train_size=train_val_split_ratio, 
+            seed=getattr(config, 'seed', 42)
+        )
+        train_dataset = split_dataset["train"]
+        val_dataset = split_dataset["test"]
+        
+        print(f"Split dataset: {len(train_dataset)} train samples, {len(val_dataset)} validation samples")
+        
+    else:
+        # Use existing train/test splits
+        if "test" not in dataset:
+            raise ValueError(f"Dataset {config.dataset_name} does not have a test split and no train_val_split_ratio specified")
+        
+        train_dataset = dataset["train"]
+        val_dataset = dataset["test"]
+        print(f"Using existing splits from official dataset: {len(train_dataset)} train samples, {len(val_dataset)} test samples")
+    
+    # Sample training data indices (will convert to instances during batching)
+    config.num_train_samples = len(train_dataset) if config.num_train_samples == 'full' else int(config.num_train_samples)
+    train_indices = random.sample(range(len(train_dataset)), config.num_train_samples)
+    
+    # Prepare evaluation data - keep as instances
+    eval_instances = []
+    if config.eval_during_training_fixed:
+        eval_indices = random.sample(range(len(val_dataset)), config.eval_during_training_samples)
+        eval_instances = [val_dataset[i] for i in eval_indices]
+    
+    # Full test set for final evaluation
+    full_eval_instances = [val_dataset[i] for i in range(len(val_dataset))]
+    
+    return train_indices, eval_instances, full_eval_instances, train_dataset, val_dataset 

@@ -1,0 +1,14 @@
+# MATH Dataset Configuration
+dataset_name: "qwedsacf/competition_math"
+dataset_config: null  # No specific configuration needed
+num_eval_samples: "full"  
+num_train_samples: "full"  # Full MATH test set 12,500, only training data
+
+# Train/test split configuration (for datasets that only have train split)
+train_val_split_ratio: 0.8  # Split train data into train(80%)/test(20%)
+# Set to null if the dataset has existing train/test splits
+
+# Dataset-specific metadata (optional)
+description: "MATH - A dataset of challenging competition mathematics problems"
+task_type: "math_reasoning"
+difficulty: "high" 

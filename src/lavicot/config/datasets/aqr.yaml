@@ -1,0 +1,14 @@
+# AQR (Algebraic Reasoning) Dataset Configuration
+dataset_name: "aqr"
+dataset_config: null
+num_eval_samples: 500  # Example smaller evaluation set
+num_train_samples: 2000  # Example training subset
+
+# Train/test split configuration (for datasets that only have train split)
+train_val_split_ratio: 0.85  # Split train data into train(85%)/test(15%)
+# Set to null if the dataset has existing train/test splits
+
+# Dataset-specific metadata (optional)
+description: "Algebraic Reasoning dataset for mathematical problem solving"
+task_type: "algebraic_reasoning"
+difficulty: "medium" 

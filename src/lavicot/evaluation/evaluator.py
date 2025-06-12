@@ -63,7 +63,7 @@ def extract_reasoning_and_answer_from_generated_text(generated_text: str) -> Tup
 T = TypeVar('T')
 
 # Import shared model utilities 
-from ..models.model_setup import setup_model_and_tokenizer, setup_prefix_generator
+from ..models.base_model_integration import setup_model_and_tokenizer, setup_prefix_generator
 
 def setup_model_and_tokenizer_for_eval(
     model_name: str,
@@ -390,8 +390,9 @@ def evaluate_batch_sequence_prediction_loss(
 def evaluate(
     model_name: str,
     config_path: Optional[str] = None,
+    dataset_config_name: Optional[str] = None,
     checkpoint_path: Optional[str] = None,
-    num_eval_samples: int = 1319,
+    num_eval_samples: int = 100,
     use_wandb: bool = False,
     wandb_project: Optional[str] = None,
     wandb_entity: Optional[str] = None,
@@ -403,6 +404,7 @@ def evaluate(
     Args:
         model_name: Name or path of the model to load
         config_path: Path to the configuration file
+        dataset_config_name: Dataset configuration name (e.g., 'gsm8k', 'math')
         checkpoint_path: Path to the checkpoint file containing saved prefixes and states
         num_eval_samples: Number of samples to evaluate
         use_wandb: Whether to use Weights & Biases logging
@@ -417,10 +419,10 @@ def evaluate(
     
     # Load configuration
     if config_path:
-        config = load_config(config_path)
+        config = load_config(config_path, dataset_config_name=dataset_config_name)
     else:
         # Use default config from parent directory
-        config = load_config()
+        config = load_config(dataset_config_name=dataset_config_name)
     
     # Initialize wandb if enabled
     if use_wandb:
@@ -469,6 +471,7 @@ def evaluate(
     test_dataset = dataset["test"]
     
     # Sample evaluation examples - keep as instances
+    num_eval_samples = len(test_dataset) if num_eval_samples == 'full' else int(num_eval_samples)
     eval_indices = random.sample(range(len(test_dataset)), num_eval_samples)
     eval_instances = [test_dataset[i] for i in eval_indices]
     

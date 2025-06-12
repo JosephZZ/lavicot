@@ -22,10 +22,7 @@ eval_during_training_fixed: true  # Whether to use fixed samples or random selec
 generation_temperature: 0.7 # Generation parameters
 
 # Dataset configuration
-dataset_name: "gsm8k"
-dataset_config: "main"  # For datasets with multiple configurations
-num_eval_samples: 1319  # Full GSM8K test set
-num_train_samples: 7473  # Full GSM8K train set
+dataset_config_name: "gsm8k"  # Refers to src/lavicot/config/datasets/gsm8k.yaml
 
 # Prefix tuning configuration
 seen_token_weight: 1.0

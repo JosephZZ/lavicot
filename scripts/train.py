@@ -11,6 +11,8 @@ def main():
     parser = argparse.ArgumentParser(description="Train LaViCoT model")
     parser.add_argument("--config", type=str, default='./src/lavicot/config/defaults/debug.yaml',
                        help="Path to configuration file")
+    parser.add_argument("--dataset", type=str, default=None,
+                       help="Dataset configuration name (e.g., 'gsm8k', 'math')")
     parser.add_argument("--resume_from_checkpoint", type=str, default=None,
                        help="Path to checkpoint folder or file to resume from")
     parser.add_argument("--auto_resume", action="store_true", default=False,

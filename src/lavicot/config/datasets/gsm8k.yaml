@@ -1,0 +1,15 @@
+# GSM8K Dataset Configuration
+dataset_name: "gsm8k"
+dataset_config: "main"  # For datasets with multiple configurations
+num_eval_samples: "full"  # Full GSM8K test set 1319 samples
+num_train_samples: "full"  # Full GSM8K train set 7473 samples
+
+# Train/test split configuration (for datasets that only have train split)
+train_val_split_ratio: null  # null means use existing train/test splits
+# If set to a value between 0 and 1 (e.g., 0.8), split train data into train(80%)/test(20%)
+
+# Dataset-specific metadata (optional)
+description: "Grade School Math 8K - A dataset of grade-school level math word problems"
+task_type: "math_reasoning"
+num_test_samples: 1319
+num_train_samples_total: 7473 

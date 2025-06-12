@@ -15,6 +15,8 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate LaViCoT model")
     parser.add_argument("--config", type=str, 
                        help="Path to configuration file")
+    parser.add_argument("--dataset", type=str, default=None,
+                       help="Dataset configuration name (e.g., 'gsm8k', 'math')")
     parser.add_argument("--model_name", type=str, default="distilgpt2",
                        help="Model name or path")
     parser.add_argument("--checkpoint_path", type=str,
@@ -32,6 +34,7 @@ def main():
     evaluate(
         model_name=args.model_name,
         config_path=args.config,
+        dataset_config_name=args.dataset,
         checkpoint_path=args.checkpoint_path,
         num_eval_samples=args.num_eval_samples,
         output_dir=args.output_dir,

@@ -23,9 +23,9 @@ from ..utils.logging_utils import (
     get_gpu_memory_usage, get_gradient_norm, get_parameter_norm,
     get_token_statistics, initialize_wandb_tracking, print_training_configuration
 )
-from ..utils.data_utils import prepare_batch, SYSTEM_PROMPT, extract_gsm8k_data_components
+from ..utils.data_utils import prepare_batch, prepare_datasets_and_samples, extract_gsm8k_data_components
 from .training_utils import setup_training_environment, compute_weighted_loss
-from .setup_utils import setup_model_and_training_components, prepare_datasets_and_samples
+from .model_setup_utils import setup_model_and_training_components
 from .checkpoint_utils import save_checkpoint
 from .components.handlers import PrefixUpdateHandler, LossComputeHandler, OptimizationHandler
 
@@ -60,23 +60,22 @@ class LaviCotTrainer:
         self.loss_handler = None
         self.optimization_handler = None
         
-        # Timing
-        self.start_time = None
         
     def setup(self):
         """Setup all training components."""
         # 1. Setup training environment
         self.device = setup_training_environment(self.config)
         
-        # 2. Setup model, optimizer, scheduler and tokenizer
+        # 2. Prepare datasets and samples
+        (self.train_indices, self.eval_instances, self.full_eval_instances, 
+         self.train_dataset, self.test_dataset) = prepare_datasets_and_samples(self.config)
+        
+
+        # 3. Setup model, optimizer, scheduler and tokenizer
         (self.model, self.optimizer, self.scheduler, self.tokenizer, 
          self.start_epoch, self.start_global_step, self.best_accuracy) = setup_model_and_training_components(
             self.config, self.device
         )
-        
-        # 3. Prepare datasets and samples
-        (self.train_indices, self.eval_instances, self.full_eval_instances, 
-         self.train_dataset, self.test_dataset) = prepare_datasets_and_samples(self.config)
         
         # 4. Initialize WandB tracking
         initialize_wandb_tracking(self.config, self.model)
@@ -98,7 +97,7 @@ class LaviCotTrainer:
     def train(self):
         """Main training loop."""
         self.setup()
-        self.start_time = time.time()
+        start_time = time.time()
         
         for epoch in range(self.start_epoch, self.config.num_train_epochs):
             self._train_epoch(epoch)
@@ -108,13 +107,13 @@ class LaviCotTrainer:
         
         if self.config.use_wandb:
             wandb.finish()
-            
-        print("Training completed!")
+        
+        time_used = time.time() - start_time
+        print(f"Training completed in {int(time_used // 3600)}h {int((time_used % 3600) // 60)}m {int(time_used % 60)}s")
         
     def _train_epoch(self, epoch: int):
         """Train for one epoch."""
         self.model.train()
-        epoch_start_time = time.time()
         
         # Shuffle training data indices
         shuffled_train_indices = self.train_indices.copy()
@@ -213,7 +212,7 @@ class LaviCotTrainer:
         
     def _evaluate_prefix_loss_curves(self) -> List[Dict]:
         """Evaluate prefix iteration loss curves."""
-        from ..evaluate import evaluate_batch_sequence_prediction_loss
+        from ..evaluation.evaluator import evaluate_batch_sequence_prediction_loss
         
         return evaluate_batch_sequence_prediction_loss(
             self.model, self.tokenizer,
