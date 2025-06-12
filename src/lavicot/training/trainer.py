@@ -207,7 +207,8 @@ class LaviCotTrainer:
         return evaluate_model_configurations(
             self.model, self.tokenizer, eval_instances, self.config.dataset_name,
             self.device, self.config.max_length, self.config.evaluation_settings,
-            temperature=getattr(self.config, 'generation_temperature', 0.7)
+            temperature=getattr(self.config, 'generation_temperature', 0.7),
+            extract_number_from_answer_only=getattr(self.config, 'extract_number_from_answer_only', False)
         )
         
     def _evaluate_prefix_loss_curves(self) -> List[Dict]:
@@ -217,7 +218,7 @@ class LaviCotTrainer:
         return evaluate_batch_sequence_prediction_loss(
             self.model, self.tokenizer,
             self.eval_instances[:self.config.eval_during_training_samples],
-            extract_gsm8k_data_components,
+            self.config.dataset_name,
             self.device, self.config.max_length,
             prefix_iterations_range=(1, self.config.prefix_generator['max_iterations'])
         )

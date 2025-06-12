@@ -1,6 +1,6 @@
 # Model configuration
 model_name: "Qwen/Qwen2.5-7B-Instruct"
-base_output_dir: "outputs/lavicot_bias"
+base_output_dir: "experiments/results"
 resume_checkpoint_path: null
 
 # Training hyperparameters
@@ -15,11 +15,12 @@ warmup_steps: 1000
 
 # Logging and evaluation
 logging_steps: 10
-save_steps: 2000
-eval_steps: 2000
+save_steps: 5000
+eval_steps: 5000
 eval_during_training_samples: 10  # Number of samples to use during training evaluation
 eval_during_training_fixed: true  # Whether to use fixed samples or random selection each time
 generation_temperature: 0.7 # Generation parameters
+extract_number_from_answer_only: true
 
 # Dataset configuration
 dataset_config_name: "metamath"  # Refers to src/lavicot/config/datasets/gsm8k.yaml

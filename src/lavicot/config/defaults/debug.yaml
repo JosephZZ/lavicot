@@ -1,11 +1,11 @@
 # Debug configuration for fast testing
-model_name: "Qwen/Qwen2.5-0.5B-Instruct"
+model_name: "Qwen/Qwen2.5-7B-Instruct"
 base_output_dir: "./lavicot/outputs/debug"
 resume_checkpoint_path: null
 
 # Minimal training parameters for debugging (calculated for complete pipeline testing)
 num_train_epochs: 1
-per_device_train_batch_size: 4
+per_device_train_batch_size: 1
 per_device_eval_batch_size: 2
 gradient_accumulation_steps: 1
 learning_rate: 1e-4
@@ -22,6 +22,7 @@ eval_steps: 2   # Evaluate after steps 2 and 4
 eval_during_training_samples: 2  # Minimal eval samples during training
 eval_during_training_fixed: true
 generation_temperature: 0.7 # Generation parameters
+extract_number_from_answer_only: true
 
 # Dataset configuration - minimal subset
 dataset_config_name: "metamath"  # Refers to src/lavicot/config/datasets/gsm8k.yaml

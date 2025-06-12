@@ -10,7 +10,7 @@ import random
 
 # Load and prep dataset
 SYSTEM_PROMPT = """
-Respond in the following format:
+Respond in the following format. Put all your thinking in <thinking> and put only the final answer (e.g number) in <answer>:
 <thinking>
 ...
 </thinking>

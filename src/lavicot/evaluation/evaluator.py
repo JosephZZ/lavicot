@@ -38,7 +38,7 @@ def extract_reasoning_from_output(generated_text: str) -> str:
     return assistant_part.strip()
 
 
-def extract_reasoning_and_answer_from_generated_text(generated_text: str, extract_number_only: bool = True) -> Tuple[str, str]:
+def extract_reasoning_and_answer_from_generated_text(generated_text: str, extract_number_from_answer_only: bool = True) -> Tuple[str, str]:
     """Extract reasoning and answer from generated text in ChatML format."""
     # Check if assistant section exists
     if "<|im_start|>assistant" not in generated_text:
@@ -59,8 +59,8 @@ def extract_reasoning_and_answer_from_generated_text(generated_text: str, extrac
     if "<answer>" in assistant_section in assistant_section:
         answer = assistant_section.split("<answer>")[1].split("</answer>")[0].strip()
     
-    if extract_number_only:
-        answer = re.search(r'\d+', answer).group()
+    if extract_number_from_answer_only:
+        answer = re.search(r'-?\d+(?!.*-?\d+)', answer).group()
     return reasoning, answer
 
 T = TypeVar('T')
@@ -99,7 +99,8 @@ def evaluate_model_configurations(
     device: str,
     max_length: int,
     evaluation_settings: List[Dict[str, Any]],
-    temperature: float = 0.7
+    temperature: float = 0.7,
+    extract_number_from_answer_only: bool = False
 ) -> Tuple[Dict[str, Dict[str, float]], Dict[str, List[Dict]]]:
     """Evaluate model with different configurations.
     
@@ -207,7 +208,7 @@ def evaluate_model_configurations(
                         )
                         
                         # Decode output
-                        generated_text = tokenizer.decode(generated[0], skip_special_tokens=True)
+                        generated_text = tokenizer.decode(generated[0], skip_special_tokens=False) # skip_special_tokens=True will remove the <|im_start|> tags, but we handle them explicitly in our later function
                         
                 except Exception as gen_error:
                     print(f"Error during generation: {str(gen_error)}")
@@ -221,7 +222,7 @@ def evaluate_model_configurations(
                     stored_prefixes[setting_index] = model.current_prefixes.clone().detach()
                 
                 # Extract reasoning and answer
-                generated_reasoning, generated_answer = extract_reasoning_and_answer_from_generated_text(generated_text)
+                generated_reasoning, generated_answer = extract_reasoning_and_answer_from_generated_text(generated_text, extract_number_from_answer_only)
                 
                 # Store complete output for this example
                 example_output = {
@@ -300,7 +301,7 @@ def evaluate_batch_sequence_prediction_loss(
     model: TestTimePrefixModel,
     tokenizer: AutoTokenizer,
     eval_instances: List[Dict[str, Any]],
-    data_extractor: callable,
+    dataset_name: str,
     device: str,
     max_length: int,
     prefix_iterations_range: Tuple[int, int] = (1, 10)
@@ -321,7 +322,8 @@ def evaluate_batch_sequence_prediction_loss(
     """
     results = []
     min_iter, max_iter = prefix_iterations_range
-    
+    data_extractor = get_data_extractor(dataset_name)
+
     model.eval()
     for idx, instance in enumerate(tqdm(eval_instances, desc="Evaluating sequence prediction loss")):
         question, reasoning, answer = data_extractor(instance)
@@ -478,11 +480,6 @@ def evaluate(
     num_eval_samples = len(test_dataset) if num_eval_samples == 'full' else int(num_eval_samples)
     eval_indices = random.sample(range(len(test_dataset)), num_eval_samples)
     eval_instances = [test_dataset[i] for i in eval_indices]
-    
-    # Import the appropriate data extraction function
-    from ..utils.data_utils import extract_gsm8k_data_components
-    data_extractor = extract_gsm8k_data_components  # Default to GSM8K format
-    
     print(f"Evaluating on {len(eval_instances)} samples")
     
     # Run evaluation
@@ -490,8 +487,9 @@ def evaluate(
     model.eval()
     with torch.no_grad():
         eval_results, model_outputs = evaluate_model_configurations(
-            model, tokenizer, eval_instances, data_extractor,
-            device, config.max_length, config.evaluation_settings
+            model, tokenizer, eval_instances, config.dataset_name,
+            device, config.max_length, config.evaluation_settings,
+            extract_number_from_answer_only=getattr(config, 'extract_number_from_answer_only', False)
         )
     
     # Print summary
