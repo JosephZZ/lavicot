@@ -2,6 +2,13 @@
 """Main training script for LaViCoT."""
 
 import argparse
+import sys
+import os
+
+# Add the project root to Python path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+
 from src.lavicot.training.trainer import LaviCotTrainer
 from src.lavicot.training.config_utils import setup_config_and_paths
 
