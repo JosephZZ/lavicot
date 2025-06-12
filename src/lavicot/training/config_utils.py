@@ -8,11 +8,12 @@ from ..config.config_loader import load_config, save_config
 from .checkpoint_utils import find_latest_checkpoint, find_latest_checkpoint_folder
 
 
-def setup_config_and_paths(args) -> SimpleNamespace:
+def setup_config_and_paths(args, config_overrides=None) -> SimpleNamespace:
     """Setup configuration and paths based on command line arguments.
     
     Args:
         args: Parsed command line arguments
+        config_overrides: Dict of config values to override from command line
         
     Returns:
         Configured config object with resume_checkpoint_path and output_dir set
@@ -21,6 +22,41 @@ def setup_config_and_paths(args) -> SimpleNamespace:
     dataset_config_name = getattr(args, 'dataset', None)
     config = load_config(args.config, dataset_config_name=dataset_config_name) 
     
+    # Apply config overrides from command line if provided
+    if config_overrides:
+        print("Applying config overrides from command line:")
+        for key, value in config_overrides.items():
+            # Handle nested config keys (e.g., "training.learning_rate")
+            if '.' in key:
+                # Split nested keys and navigate to the correct config section
+                keys = key.split('.')
+                current_config = config
+                for k in keys[:-1]:
+                    # Handle both dict and SimpleNamespace objects
+                    if isinstance(current_config, dict):
+                        if k not in current_config:
+                            current_config[k] = {}
+                        current_config = current_config[k]
+                    else:
+                        if not hasattr(current_config, k):
+                            setattr(current_config, k, SimpleNamespace())
+                        current_config = getattr(current_config, k)
+                
+                # Set the final value
+                final_key = keys[-1]
+                if isinstance(current_config, dict):
+                    current_config[final_key] = value
+                else:
+                    setattr(current_config, final_key, value)
+                print(f"  {key}: {value}")
+            else:
+                # Direct config key
+                if isinstance(config, dict):
+                    config[key] = value
+                else:
+                    setattr(config, key, value)
+                print(f"  {key}: {value}")
+    
     # Initialize parameters to set up
     resume_checkpoint_path = None
     output_dir = None
@@ -28,7 +64,7 @@ def setup_config_and_paths(args) -> SimpleNamespace:
     # 1. Handle auto_resume: find latest folder and checkpoint
     if args.auto_resume:
         print("Auto-resume enabled: looking for latest checkpoint...")
-        base_output_dir = args.output_dir_parent
+        base_output_dir = args.base_output_dir
         latest_folder = find_latest_checkpoint_folder(base_output_dir)
         if latest_folder:
             latest_checkpoint = find_latest_checkpoint(latest_folder)
@@ -92,7 +128,7 @@ def setup_config_and_paths(args) -> SimpleNamespace:
         datetime_str = current_time.strftime("%m%d%H%M")
         
         # Create new output directory path
-        base_output_dir = args.output_dir_parent if args.output_dir_parent else config.base_output_dir
+        base_output_dir = args.base_output_dir if args.base_output_dir else config.base_output_dir
         config.output_dir = os.path.join(
             base_output_dir,
             f"{base_model_name}_{dataset_name}_{datetime_str}"
