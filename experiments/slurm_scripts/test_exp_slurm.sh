@@ -17,4 +17,29 @@ cd /scratch/zhouziheng/lavicot
 pwd
 
 python scripts/train.py \
-  --config experiments/configs/default.yaml
+  --config experiments/configs/default.yaml \
+  --base_output_dir experiments/results/ \
+  --model_name Qwen/Qwen2.5-7B-Instruct \
+  --resume_checkpoint_path null \
+  --dataset_config_name metamath \
+  --num_train_epochs 100 \
+  --per_device_train_batch_size 4 \
+  --gradient_accumulation_steps 8 \
+  --learning_rate 1e-5 \
+  --max_length 512 \
+  --warmup_steps 1000 \
+  --save_steps 5000 \
+  --eval_steps 5000 \
+  --seen_token_weight 1.0 \
+  --unseen_token_weight 1.0 \
+  --num_rounds 2 \
+  --stochastic_rounds true \
+  --first_round_question_only true \
+  --use_previous_prefix true \
+  --proportion_min 0.1 \
+  --proportion_max 0.9 \
+  --prefix_generator.layer_selection_mode all \
+  --prefix_generator.max_iterations 7 \
+  --prefix_generator.gradient_steps 4 \
+  --prefix_generator.shared_weight_for_all_layers true \
+  --prefix_generator.use_hooks_during_prefix_update false
