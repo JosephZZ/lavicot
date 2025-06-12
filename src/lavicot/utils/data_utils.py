@@ -54,11 +54,19 @@ def extract_math_data_components(data_instance: Dict[str, str]) -> Tuple[str, st
     answer = data_instance["solution"].split("boxed{")[1].split("}")[0].strip()
     return question, reasoning, answer
 
+def extract_metamath_data_components(data_instance: Dict[str, str]) -> Tuple[str, str, str]:
+    question = data_instance["query"]
+    reasoning = data_instance["response"].split("The answer is:")[0]
+    answer = data_instance["response"].split("The answer is:")[1].strip()
+    return question, reasoning, answer
+
 def get_data_extractor(dataset_name: str) -> Callable[[Dict[str, str]], Tuple[str, str, str]]:
     if "gsm8k" in dataset_name:
         return extract_gsm8k_data_components
-    elif "math" in dataset_name:
+    elif "competition_math" in dataset_name:
         return extract_math_data_components
+    elif "MetaMath" in dataset_name:
+        return extract_metamath_data_components
     else:
         raise ValueError(f"Invalid dataset name: {dataset_name}")
 

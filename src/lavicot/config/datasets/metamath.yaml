@@ -1,0 +1,16 @@
+# MetaMathQA Dataset Configuration
+dataset_name: "meta-math/MetaMathQA"
+dataset_config: null  # No specific configuration needed
+num_eval_samples: "full" 
+num_train_samples: "full"  # Full MetaMathQA dataset with 395,000 samples
+
+# Train/test split configuration (for datasets that only have train split)
+train_val_split_ratio: 0.99  # Split train data 
+# Set to null if the dataset has existing train/test splits and want to use it
+
+# Dataset-specific metadata (optional)
+description: "MetaMathQA - Bootstrap Your Own Mathematical Questions for Large Language Models. Augmented math reasoning dataset from GSM8K and MATH training sets."
+task_type: "math_reasoning"
+difficulty: "mixed"  # Contains both GSM8K (medium) and MATH (high) difficulty problems
+paper_url: "https://arxiv.org/abs/2309.12284"
+project_url: "https://meta-math.github.io/"
