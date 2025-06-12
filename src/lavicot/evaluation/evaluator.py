@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional, Union, Tuple, TypeVar
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
+import re
 
 from ..models.lavicot_bias import (
     add_instance_level_prefix_generator,
@@ -37,7 +38,7 @@ def extract_reasoning_from_output(generated_text: str) -> str:
     return assistant_part.strip()
 
 
-def extract_reasoning_and_answer_from_generated_text(generated_text: str) -> Tuple[str, str]:
+def extract_reasoning_and_answer_from_generated_text(generated_text: str, extract_number_only: bool = True) -> Tuple[str, str]:
     """Extract reasoning and answer from generated text in ChatML format."""
     # Check if assistant section exists
     if "<|im_start|>assistant" not in generated_text:
@@ -58,6 +59,8 @@ def extract_reasoning_and_answer_from_generated_text(generated_text: str) -> Tup
     if "<answer>" in assistant_section in assistant_section:
         answer = assistant_section.split("<answer>")[1].split("</answer>")[0].strip()
     
+    if extract_number_only:
+        answer = re.search(r'\d+', answer).group()
     return reasoning, answer
 
 T = TypeVar('T')
@@ -229,7 +232,7 @@ def evaluate_model_configurations(
                     "generated_reasoning": generated_reasoning,
                     "generated_answer": generated_answer,
                     "iterations_used": iterations,
-                    "is_correct": generated_answer == ground_truth_answer
+                    "is_correct": generated_answer.strip() == ground_truth_answer.strip()
                 }
 
                 # Store output for this setting
