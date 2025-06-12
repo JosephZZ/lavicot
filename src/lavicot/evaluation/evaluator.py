@@ -19,7 +19,7 @@ from ..config.config_loader import load_config, save_config
 from ..utils.logging_utils import (
     count_parameters, get_gpu_memory_usage
 )
-from ..utils.data_utils import get_formatted_data, SYSTEM_PROMPT
+from ..utils.data_utils import get_formatted_data, get_data_extractor
 from ..utils.tokenizer_utils import get_generation_pad_token_id
 
 def extract_reasoning_from_output(generated_text: str) -> str:
@@ -92,7 +92,7 @@ def evaluate_model_configurations(
     model: TestTimePrefixModel,
     tokenizer: AutoTokenizer,
     eval_instances: List[Dict[str, Any]],
-    data_extractor: callable,
+    dataset_name: str,
     device: str,
     max_length: int,
     evaluation_settings: List[Dict[str, Any]],
@@ -114,7 +114,8 @@ def evaluate_model_configurations(
     """
     results = {}
     model_outputs = {}  # Store model outputs for each setting
-    
+    data_extractor = get_data_extractor(dataset_name)
+
     # Initialize results structure
     for setting in evaluation_settings:
         setting_index = setting["setting_index"]

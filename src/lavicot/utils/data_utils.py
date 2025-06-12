@@ -48,6 +48,20 @@ def extract_gsm8k_data_components(data_instance: Dict[str, str]) -> Tuple[str, s
     answer = data_instance["answer"].split("####")[1].strip()
     return question, reasoning, answer
 
+def extract_math_data_components(data_instance: Dict[str, str]) -> Tuple[str, str, str]:
+    question = data_instance["problem"]
+    reasoning = data_instance["solution"].split("boxed{")[0]
+    answer = data_instance["solution"].split("boxed{")[1].split("}")[0].strip()
+    return question, reasoning, answer
+
+def get_data_extractor(dataset_name: str) -> Callable[[Dict[str, str]], Tuple[str, str, str]]:
+    if "gsm8k" in dataset_name:
+        return extract_gsm8k_data_components
+    elif "math" in dataset_name:
+        return extract_math_data_components
+    else:
+        raise ValueError(f"Invalid dataset name: {dataset_name}")
+
 def test_formatted_data_same_as_official_template(tokenizer, question):
     official_prompt_text = tokenizer.apply_chat_template([
             {"role": "system", "content": SYSTEM_PROMPT.strip()},
@@ -99,7 +113,7 @@ def prepare_batch(
     min_proportion: float = 0.3,
     max_proportion: float = 0.7,
     device: str = "cuda",
-    data_components_extractor: Callable[[Dict[str, str]], Tuple[str, str, str]] = extract_gsm8k_data_components,
+    dataset_name: str = "gsm8k",
     return_question_token_lengths: bool = False
 ) -> torch.Tensor:
     """Prepare a batch of data for training.
@@ -117,6 +131,8 @@ def prepare_batch(
     Returns:
         batch_inputs tensor, or (batch_inputs, question_token_lengths) tuple if return_question_token_lengths=True
     """
+    data_components_extractor = get_data_extractor(dataset_name)
+
     batch_inputs = []
     question_token_lengths = [] if return_question_token_lengths else None
     # is_same = test_formatted_data_same_as_official_template(tokenizer, data_instances[0]["question"])

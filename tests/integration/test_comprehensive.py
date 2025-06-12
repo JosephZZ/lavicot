@@ -191,7 +191,8 @@ def test_actual_training(model, tokenizer):
             data_instances=train_data,
             tokenizer=tokenizer,
             max_length=256,
-            device=device
+            device=device,
+            dataset_name="gsm8k"
         )
         model.update_prefix_given_input(input_ids=batch_inputs_q)
         
@@ -203,7 +204,8 @@ def test_actual_training(model, tokenizer):
             max_length=256,
             min_proportion=0.3,
             max_proportion=0.7,
-            device=device
+            dataset_name="gsm8k"
+            device=device,
         )
         model.update_prefix_given_input(input_ids=batch_inputs_partial)
         
@@ -213,7 +215,8 @@ def test_actual_training(model, tokenizer):
             data_instances=train_data,
             tokenizer=tokenizer,
             max_length=256,
-            device=device
+            device=device,
+            dataset_name="gsm8k"
         )
         
         # Forward pass

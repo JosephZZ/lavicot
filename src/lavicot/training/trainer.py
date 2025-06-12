@@ -205,7 +205,7 @@ class LaviCotTrainer:
     def _run_evaluation(self, eval_instances: List[Dict]) -> Tuple[Dict, List]:
         """Run model evaluation on given instances."""
         return evaluate_model_configurations(
-            self.model, self.tokenizer, eval_instances, extract_gsm8k_data_components,
+            self.model, self.tokenizer, eval_instances, self.config.dataset_name,
             self.device, self.config.max_length, self.config.evaluation_settings,
             temperature=getattr(self.config, 'generation_temperature', 0.7)
         )

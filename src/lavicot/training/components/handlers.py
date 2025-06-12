@@ -46,7 +46,8 @@ class PrefixUpdateHandler:
             max_length=self.config.max_length,
             min_proportion=min_prop,
             max_proportion=max_prop,
-            device=self.device
+            device=self.device,
+            dataset_name=self.config.dataset_name
         )
         
         # Update prefix
@@ -111,6 +112,7 @@ class LossComputeHandler:
             min_proportion=1.0,
             max_proportion=1.0,
             device=self.device,
+            dataset_name=self.config.dataset_name,
             return_question_token_lengths=True
         )
         
