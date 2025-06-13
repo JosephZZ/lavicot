@@ -20,11 +20,11 @@ python scripts/train.py \
   --config experiments/configs/default.yaml \
   --base_output_dir experiments/results/ \
   --model_name Qwen/Qwen2.5-7B-Instruct \
-  --resume_checkpoint_path null \
   --dataset_config_name metamath \
+  --model_type lavicot_prefix_attention \
   --num_train_epochs 100 \
-  --per_device_train_batch_size 4 \
-  --gradient_accumulation_steps 8 \
+  --per_device_train_batch_size 2 \
+  --gradient_accumulation_steps 12 \
   --learning_rate 1e-5 \
   --max_length 512 \
   --warmup_steps 1000 \
@@ -38,6 +38,10 @@ python scripts/train.py \
   --use_previous_prefix true \
   --proportion_min 0.1 \
   --proportion_max 0.9 \
+  --prefix_generator.num_prefix_tokens 8 \
+  --prefix_generator.num_blocks 1 \
+  --prefix_generator.dropout 0.01 \
+  --prefix_generator.use_learnable_queries true \
   --prefix_generator.layer_selection_mode all \
   --prefix_generator.max_iterations 7 \
   --prefix_generator.gradient_steps 4 \

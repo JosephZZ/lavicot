@@ -1,13 +1,14 @@
 # Model configuration
 model_name: "Qwen/Qwen2.5-7B-Instruct"
-base_output_dir: "experiments/results"
+model_type: "lavicot_bias"  # Options: "lavicot_bias", "lavicot_bias_gamma", "lavicot_prefix_attention"
+base_output_dir: "outputs/lavicot_bias"
 resume_checkpoint_path: null
 
 # Training hyperparameters
-num_train_epochs: 100
-per_device_train_batch_size: 4
-gradient_accumulation_steps: 8 # effective batch size: 12*4=48
-per_device_eval_batch_size: 5
+num_train_epochs: 300
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 12 # effective batch size: 12*4=48
+per_device_eval_batch_size: 1
 learning_rate: 1e-5
 max_length: 512
 max_grad_norm: 1.0
@@ -15,11 +16,11 @@ warmup_steps: 1000
 
 # Logging and evaluation
 logging_steps: 10
-save_steps: 5000
-eval_steps: 5000
+save_steps: 2000
+eval_steps: 2000
 eval_during_training_samples: 10  # Number of samples to use during training evaluation
 eval_during_training_fixed: true  # Whether to use fixed samples or random selection each time
-generation_temperature: 0.7 # Generation parameters
+generation_temperature: 0.5 # Generation parameters
 extract_number_from_answer_only: true
 
 # Dataset configuration
@@ -37,6 +38,10 @@ proportion_max: 0.9
 
 # Prefix generator configuration
 prefix_generator:
+  num_prefix_tokens: 8
+  num_blocks: 1
+  dropout: 0.01
+  use_learnable_queries: true
   # Layer selection mode: "all", "specific", "exclude", or "spread"
   layer_selection_mode: "all"
   # For "specific" mode: list of layer indices to tune
