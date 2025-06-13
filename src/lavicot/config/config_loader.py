@@ -2,7 +2,7 @@
 
 import os
 import yaml
-from types import SimpleNamespace
+from dotmap import DotMap
 from typing import Dict, Any, Optional
 
 def load_dataset_config(dataset_name: str) -> Dict[str, Any]:
@@ -26,7 +26,7 @@ def load_dataset_config(dataset_name: str) -> Dict[str, Any]:
     with open(dataset_config_path, 'r') as f:
         return yaml.safe_load(f)
 
-def load_config(config_path: Optional[str] = None, dataset_config_name: Optional[str] = None, **kwargs) -> SimpleNamespace:
+def load_config(config_path: Optional[str] = None, dataset_config_name: Optional[str] = None, **kwargs) -> DotMap:
     """Load configuration from YAML file and override with command-line arguments.
     
     Args:
@@ -35,7 +35,7 @@ def load_config(config_path: Optional[str] = None, dataset_config_name: Optional
         **kwargs: Command-line arguments to override config values.
         
     Returns:
-        SimpleNamespace object with merged configuration.
+        DotMap object with merged configuration.
     """
     # Start with default config path if none provided
     if config_path is None:
@@ -74,20 +74,20 @@ def load_config(config_path: Optional[str] = None, dataset_config_name: Optional
             except ValueError:
                 pass
     
-    # Convert to SimpleNamespace for dot notation access
-    return SimpleNamespace(**config)
+    # Convert to DotMap for dot notation access
+    return DotMap(config)
 
-def save_config(config: SimpleNamespace, output_dir: str) -> None:
+def save_config(config: DotMap, output_dir: str) -> None:
     """Save configuration to a YAML file.
     
     Args:
-        config: SimpleNamespace object to save
+        config: DotMap object to save
         output_dir: Directory to save the config file
     """
     os.makedirs(output_dir, exist_ok=True)
     
-    # Convert SimpleNamespace to dict
-    config_dict = vars(config)
+    # Convert DotMap to dict
+    config_dict = config.toDict()
     
     # Convert to YAML
     yaml_str = yaml.dump(config_dict, default_flow_style=False, sort_keys=False)

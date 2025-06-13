@@ -1,14 +1,14 @@
 import os
 import datetime
 import argparse
-from types import SimpleNamespace
+from dotmap import DotMap
 from typing import Optional
 
 from ..config.config_loader import load_config, save_config
 from .checkpoint_utils import find_latest_checkpoint, find_latest_checkpoint_folder
 
 
-def setup_config_and_paths(args, config_overrides=None) -> SimpleNamespace:
+def setup_config_and_paths(args, config_overrides=None) -> DotMap:
     """Setup configuration and paths based on command line arguments.
     
     Args:
@@ -20,7 +20,7 @@ def setup_config_and_paths(args, config_overrides=None) -> SimpleNamespace:
     """
     # Load initial config with optional dataset config
     dataset_config_name = getattr(args, 'dataset', None)
-    config = load_config(args.config, dataset_config_name=dataset_config_name) 
+    config = load_config(args.config, dataset_config_name=dataset_config_name)
     
     # Apply config overrides from command line if provided
     if config_overrides:
@@ -32,29 +32,29 @@ def setup_config_and_paths(args, config_overrides=None) -> SimpleNamespace:
                 keys = key.split('.')
                 current_config = config
                 for k in keys[:-1]:
-                    # Handle both dict and SimpleNamespace objects
+                    # Handle both dict and DotMap objects
                     if isinstance(current_config, dict):
                         if k not in current_config:
                             current_config[k] = {}
                         current_config = current_config[k]
                     else:
                         if not hasattr(current_config, k):
-                            setattr(current_config, k, SimpleNamespace())
-                        current_config = getattr(current_config, k)
+                            current_config[k] = DotMap()
+                        current_config = current_config[k]
                 
                 # Set the final value
                 final_key = keys[-1]
                 if isinstance(current_config, dict):
                     current_config[final_key] = value
                 else:
-                    setattr(current_config, final_key, value)
+                    current_config[final_key] = value
                 print(f"  {key}: {value}")
             else:
                 # Direct config key
                 if isinstance(config, dict):
                     config[key] = value
                 else:
-                    setattr(config, key, value)
+                    config[key] = value
                 print(f"  {key}: {value}")
     
     # Initialize parameters to set up

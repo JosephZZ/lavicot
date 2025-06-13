@@ -2,9 +2,8 @@ import torch
 import torch.nn as nn
 from typing import List
 from transformers import PreTrainedTokenizer
-from types import SimpleNamespace
+from dotmap import DotMap
 
-from ..models.lavicot_bias import TestTimePrefixModel
 
 def set_seed(seed: int):
     """Set random seed for reproducibility.
@@ -21,12 +20,12 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
 
 
-def get_config_value(config: SimpleNamespace, key: str, default=None):
+def get_config_value(config: DotMap, key: str, default=None):
     """Safely get a config value with a default fallback."""
-    return getattr(config, key, default)
+    return config.get(key, default)
 
 
-def setup_training_environment(config: SimpleNamespace) -> str:
+def setup_training_environment(config: DotMap) -> str:
     """Setup basic training environment including device and seed.
     
     Args:
@@ -41,35 +40,43 @@ def setup_training_environment(config: SimpleNamespace) -> str:
     return device
 
 
-def create_optimizer(model: TestTimePrefixModel, learning_rate: float) -> torch.optim.Optimizer:
-    """Create optimizer for prefix generator parameters only.
+def extract_non_base_model_parameters(model):
+    """Extract all parameters that are not part of base_model."""
+    non_base_params = []
+    non_base_param_names = set()
+    first_level_counts = {}
     
-    Args:
-        model: The model with prefix generators
-        learning_rate: Learning rate for the optimizer
-        
-    Returns:
-        Configured AdamW optimizer
-    """
-    # Get only prefix generator parameters
-    prefix_params = list(model.prefix_generators.parameters())
-    if not prefix_params:
-        raise ValueError("No trainable prefix generator parameters found!")
-    
-    # DEBUG: Print prefix generator parameter info
-    print("DEBUG: Prefix generator parameters for optimizer:")
     for name, param in model.named_parameters():
-        if name.startswith('prefix_generators.') and param.requires_grad:
-            print(f"  {name}: shape={param.shape}, numel={param.numel()}")
+        if not name.startswith('base_model.'):
+            non_base_params.append(param)
+            # Get the first-level name (before the first dot)
+            first_level = name.split('.', 1)[0]
+            non_base_param_names.add(first_level)
+            first_level_counts[first_level] = first_level_counts.get(first_level, 0) + param.numel()
     
-    print(f"DEBUG: Creating optimizer with {len(prefix_params)} parameter groups ({sum(p.numel() for p in prefix_params):,} total parameters)")
+    if not non_base_params:
+        raise ValueError("No trainable non-base_model parameters found!")
     
-    return torch.optim.AdamW(prefix_params, lr=learning_rate)
+    # Print parameter counts by component
+    print("\nTrainable parameters by component:")
+    for k, v in first_level_counts.items():
+        print(f"  {k}: {v} parameters")
+    print(f"DEBUG: Creating optimizer with {len(non_base_params)} parameters ({sum(first_level_counts.values()):,} total parameters)")
+    
+    return non_base_params
+
+
+def create_optimizer(model, learning_rate: float, tune_non_base_model_parameters_only: bool = True):
+    if tune_non_base_model_parameters_only:
+        param_to_tune = extract_non_base_model_parameters(model)
+    else:
+        param_to_tune = model.parameters()
+    return torch.optim.AdamW(param_to_tune, lr=learning_rate)
 
 
 def create_scheduler(
     optimizer: torch.optim.Optimizer, 
-    config: SimpleNamespace,
+    config: DotMap,
     start_epoch: int = 0
 ) -> torch.optim.lr_scheduler.OneCycleLR:
     """Create learning rate scheduler.

@@ -11,11 +11,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 import re
 
-from ..models.lavicot_bias import (
-    add_instance_level_prefix_generator,
-    create_test_time_prefix_config,
-    TestTimePrefixModel
-)
 from ..config.config_loader import load_config, save_config
 from ..utils.logging_utils import (
     count_parameters, get_gpu_memory_usage
@@ -66,7 +61,7 @@ def extract_reasoning_and_answer_from_generated_text(generated_text: str, extrac
 T = TypeVar('T')
 
 # Import shared model utilities 
-from ..models.base_model_integration import setup_model_and_tokenizer, setup_prefix_generator
+from ..models.lavicot_setup import setup_base_model_and_tokenizer, setup_adapter_generator
 
 def setup_model_and_tokenizer_for_eval(
     model_name: str,
@@ -74,13 +69,13 @@ def setup_model_and_tokenizer_for_eval(
     config_dict: dict,
     initial_prefixes: Optional[torch.Tensor] = None,
     initial_states: Optional[torch.Tensor] = None
-) -> Tuple[TestTimePrefixModel, AutoTokenizer]:
+):
     """Initialize model and tokenizer for evaluation with proper configuration."""
     print(f"Loading model for evaluation: {model_name}")
     
     # Use shared setup functions
-    base_model, tokenizer = setup_model_and_tokenizer(model_name, device)
-    model = setup_prefix_generator(
+    base_model, tokenizer = setup_base_model_and_tokenizer(model_name, device)
+    model = setup_adapter_generator(
         base_model, 
         device,
         config_dict,
@@ -92,7 +87,7 @@ def setup_model_and_tokenizer_for_eval(
     return model, tokenizer
 
 def evaluate_model_configurations(
-    model: TestTimePrefixModel,
+    model,
     tokenizer: AutoTokenizer,
     eval_instances: List[Dict[str, Any]],
     dataset_name: str,
@@ -298,7 +293,7 @@ def evaluate_model_configurations(
 
 
 def evaluate_batch_sequence_prediction_loss(
-    model: TestTimePrefixModel,
+    model,
     tokenizer: AutoTokenizer,
     eval_instances: List[Dict[str, Any]],
     dataset_name: str,

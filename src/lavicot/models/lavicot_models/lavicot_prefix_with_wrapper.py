@@ -20,8 +20,8 @@ class TestTimePrefixConfig:
     gradient_steps: int = 4  # Number of iterations to allow gradients through
     shared_weight_for_all_layers: bool = True  # Whether all layers share the same prefix generator
     
-    # Hook control configuration
-    use_hooks_during_prefix_update: bool = False  # Whether to use hooks during prefix generation
+    # Wrapper control configuration  
+    use_hooks_during_prefix_update: bool = False  # Whether to use prefixes during prefix generation (legacy name)
 
 class RMSNorm(nn.Module):
     """Root Mean Square Layer Normalization."""
@@ -146,57 +146,73 @@ class PrefixGenerator(nn.Module):
         
         return states_iters, prefix
 
-class PrefixAttentionHook:
-    """Handles prefix injection and removal for a specific attention layer."""
+
+
+class GenericPrefixAttentionWrapper:
+    """Generic wrapper for attention layers that handles prefix injection via monkey patching.
     
-    def __init__(self, layer_idx: int, hidden_size: int):
+    Works with different model architectures by automatically detecting the forward signature.
+    """
+    
+    def __init__(self, original_attention, layer_idx: int, parent_model):
+        self.original_attention = original_attention
         self.layer_idx = layer_idx
-        self.hidden_size = hidden_size
-        self.prefix = None  # Store prefix locally for proper with/without control
-        self.hook_handle = None
+        self.parent_model = parent_model
+        self.prefix = None
         
+        # Store original forward method
+        self.original_forward = original_attention.forward
+        
+        # Detect model architecture for signature handling
+        self.model_type = self._detect_model_type()
+        
+        # Replace forward method with our wrapped version
+        original_attention.forward = self.wrapped_forward
+    
+    def _detect_model_type(self):
+        """Detect the model architecture based on attention layer type."""
+        attention_type = type(self.original_attention).__name__
+        
+        if 'Qwen' in attention_type:
+            return 'qwen'
+        elif 'GPT2' in attention_type or 'Attention' in attention_type:
+            return 'gpt2'
+        elif 'BertAttention' in attention_type:
+            return 'bert'
+        else:
+            # Default to trying Qwen signature first, then GPT-2
+            return 'auto'
+    
     def set_prefix(self, prefix: torch.Tensor):
         """Set the prefix for this layer."""
         self.prefix = prefix
         
     def clear_prefix(self):
-        """Clear the prefix for this layer.""" 
+        """Clear the prefix for this layer."""
         self.prefix = None
     
-    def _modify_attention_inputs(self, module, input_args):
-        """Hook function to modify attention inputs by adding prefix."""
-        # DEBUG: Check what we're actually receiving
-        print(f"DEBUG Hook Layer {self.layer_idx}: Called with module={type(module)}")
-        print(f"  input_args type={type(input_args)}, length={len(input_args) if hasattr(input_args, '__len__') else 'no len'}")
+    def wrapped_forward(self, *args, **kwargs):
+        """Generic wrapped forward method that adapts to different attention signatures."""
         
-        # For PyTorch pre_hooks, input_args should be a tuple of arguments
-        # But sometimes it might be passed differently
-        if hasattr(input_args, '__len__') and len(input_args) > 0:
-            for i, arg in enumerate(input_args):
-                if hasattr(arg, 'shape'):
-                    print(f"  arg[{i}]: {type(arg)} shape={arg.shape}")
-                else:
-                    print(f"  arg[{i}]: {type(arg)}")
+        # Handle keyword-only arguments (newer Qwen models)
+        if len(args) == 0 and 'hidden_states' in kwargs:
+            # Modern approach: all arguments are keyword arguments
+            hidden_states = kwargs['hidden_states']
+        elif len(args) > 0:
+            # Traditional approach: hidden_states is first positional argument
+            hidden_states = args[0]
         else:
-            print(f"  input_args is empty or not iterable")
+            # No hidden_states found, call original method
+            return self.original_forward(*args, **kwargs)
         
-        # Let's also check if input is passed as individual arguments
-        print(f"  Total args passed to hook: {len(input_args) if hasattr(input_args, '__len__') else 0}")
+        # Safety check: ensure hidden_states is a tensor with the expected shape
+        if not hasattr(hidden_states, 'shape') or len(hidden_states.shape) < 2:
+            return self.original_forward(*args, **kwargs)
         
-        if self.prefix is None:
-            print(f"DEBUG Hook Layer {self.layer_idx}: No prefix set, returning original args")
-            return input_args
+        original_seq_len = hidden_states.shape[1]
         
-        # Extract arguments based on length
-        if len(input_args) == 0:
-            print(f"DEBUG Hook Layer {self.layer_idx}: No input arguments received!")
-            return input_args
-            
-        hidden_states = input_args[0]
-        if hidden_states is None:
-            return input_args
-        
-        try:
+        # Process arguments based on detected model type
+        if self.prefix is not None:
             # Convert prefix to match hidden states
             prefix_converted = self.prefix.to(
                 dtype=hidden_states.dtype, 
@@ -205,24 +221,22 @@ class PrefixAttentionHook:
             
             # Concatenate prefix with hidden states
             modified_hidden_states = torch.cat([prefix_converted, hidden_states], dim=1)
+            prefix_len = prefix_converted.shape[1]
             
-            # Handle different attention layer signatures
-            if len(input_args) == 1:
-                # Simple case: just hidden states
-                return (modified_hidden_states,)
+            # Handle both args and kwargs based calling style
+            modified_args = list(args)
+            modified_kwargs = kwargs.copy()
             
-            elif len(input_args) >= 3:
-                # Qwen-style: (hidden_states, position_embeddings, attention_mask, ...)
-                position_embeddings = input_args[1]
-                attention_mask = input_args[2]
+            if len(args) == 0 and 'hidden_states' in kwargs:
+                # Keyword-only style (modern Qwen)
+                modified_kwargs['hidden_states'] = modified_hidden_states
                 
-                # Modify attention mask to account for prefix tokens
-                modified_attention_mask = attention_mask
-                if attention_mask is not None and attention_mask.dim() >= 2:
+                # Handle attention mask in kwargs
+                if 'attention_mask' in kwargs and kwargs['attention_mask'] is not None:
+                    attention_mask = kwargs['attention_mask']
                     batch_size = hidden_states.shape[0]
-                    prefix_len = prefix_converted.shape[1]
                     
-                    # Create mask for prefix tokens (all ones - prefix tokens can attend to everything)
+                    # Create mask for prefix tokens (all ones)
                     prefix_mask = torch.ones(
                         batch_size, prefix_len, 
                         dtype=attention_mask.dtype, 
@@ -231,120 +245,194 @@ class PrefixAttentionHook:
                     
                     # Concatenate prefix mask with original mask
                     modified_attention_mask = torch.cat([prefix_mask, attention_mask], dim=1)
+                    modified_kwargs['attention_mask'] = modified_attention_mask
                 
-                # Keep position embeddings unchanged (they should work with longer sequences)
-                # Reconstruct args tuple with modifications
-                modified_args = [modified_hidden_states, position_embeddings, modified_attention_mask]
+                # Handle position_ids in kwargs
+                if 'position_ids' in kwargs and kwargs['position_ids'] is not None:
+                    position_ids = kwargs['position_ids']
+                    batch_size = position_ids.shape[0]  # Get batch size from position_ids itself
+                    
+                    # Create position ids for prefix tokens (0, 1, 2, ..., prefix_len-1)
+                    prefix_position_ids = torch.arange(
+                        prefix_len, 
+                        dtype=position_ids.dtype, 
+                        device=position_ids.device
+                    ).unsqueeze(0)
+                    
+                    # Shift original position_ids by prefix_len
+                    shifted_position_ids = position_ids + prefix_len
+                    
+                    # Concatenate prefix positions with shifted original positions
+                    modified_position_ids = torch.cat([prefix_position_ids, shifted_position_ids], dim=1)
+                    modified_kwargs['position_ids'] = modified_position_ids
                 
-                # Add remaining arguments unchanged
-                if len(input_args) > 3:
-                    modified_args.extend(input_args[3:])
+                # Handle cache_position in kwargs
+                if 'cache_position' in kwargs and kwargs['cache_position'] is not None:
+                    cache_position = kwargs['cache_position']
+                    
+                    # Create cache positions for prefix tokens
+                    prefix_cache_position = torch.arange(
+                        prefix_len, 
+                        dtype=cache_position.dtype, 
+                        device=cache_position.device
+                    )
+                    
+                    # Shift original cache_position by prefix_len
+                    shifted_cache_position = cache_position + prefix_len
+                    
+                    # Concatenate prefix cache positions with shifted original positions
+                    modified_cache_position = torch.cat([prefix_cache_position, shifted_cache_position], dim=0)
+                    modified_kwargs['cache_position'] = modified_cache_position
                 
-                return tuple(modified_args)
-            
+                # Handle position_embeddings (RoPE) in kwargs
+                if 'position_embeddings' in kwargs and kwargs['position_embeddings'] is not None:
+                    cos_emb, sin_emb = kwargs['position_embeddings']
+                    
+                    # For RoPE, we need to extend the cos/sin embeddings for prefix positions
+                    # The prefix positions should use the same pattern as positions 0 to prefix_len-1
+                    prefix_cos = cos_emb[:, :prefix_len, :]  # Take first prefix_len positions
+                    prefix_sin = sin_emb[:, :prefix_len, :]  # Take first prefix_len positions
+                    
+                    # Concatenate prefix embeddings with original embeddings
+                    extended_cos = torch.cat([prefix_cos, cos_emb], dim=1)
+                    extended_sin = torch.cat([prefix_sin, sin_emb], dim=1)
+                    
+                    modified_kwargs['position_embeddings'] = (extended_cos, extended_sin)
+                    
             else:
-                # Two arguments - handle as best we can
-                modified_args = [modified_hidden_states]
-                modified_args.extend(input_args[1:])
-                return tuple(modified_args)
-            
-        except Exception as e:
-            # Fail silently to avoid breaking the model forward pass
-            # print(f"Warning: Prefix input hook failed for layer {self.layer_idx}: {e}")
-            return input_args
-    
-    def _modify_attention_outputs(self, module, input_args, output):
-        """Hook function to remove prefix from attention outputs."""
-        if self.prefix is None:
-            return output
-        
-        try:
-            prefix_len = self.prefix.size(1)
-            
-            # Handle different output formats
-            if isinstance(output, tuple):
-                modified_outputs = []
+                # Positional args style (traditional)
+                modified_args[0] = modified_hidden_states
                 
-                for i, item in enumerate(output):
-                    if hasattr(item, 'dim') and hasattr(item, 'size') and item.dim() >= 2:
-                        # This is a tensor with at least 2 dimensions
-                        # Check if it has sequence length dimension that needs trimming
-                        if item.size(-2) > prefix_len:  # sequence length is usually second-to-last dim
-                            # Remove prefix from sequence dimension
-                            if item.dim() == 3:
-                                # [batch, seq_len, hidden] - main output or similar
-                                modified_item = item[:, prefix_len:]
-                            elif item.dim() == 4:
-                                # [batch, heads, seq_len, head_dim] - key/value states
-                                modified_item = item[:, :, prefix_len:]
-                            else:
-                                # Other dimensions - try to remove from second dimension
-                                modified_item = item[:, prefix_len:]
-                            modified_outputs.append(modified_item)
+                # Handle attention mask in args or kwargs
+                attention_mask = None
+                mask_idx = None
+                
+                if self.model_type == 'qwen' and len(args) >= 3:
+                    attention_mask = args[2]
+                    mask_idx = 2
+                elif 'attention_mask' in kwargs:
+                    attention_mask = kwargs['attention_mask']
+                elif len(args) > 1:
+                    # Try to find attention mask in positional args
+                    for i, arg in enumerate(args[1:], 1):
+                        if hasattr(arg, 'shape') and arg.dim() >= 2 and arg.shape[-1] == hidden_states.shape[1]:
+                            attention_mask = arg
+                            mask_idx = i
+                            break
+                
+                # Modify attention mask if found
+                if attention_mask is not None:
+                    batch_size = hidden_states.shape[0]
+                    
+                    # Create mask for prefix tokens (all ones)
+                    prefix_mask = torch.ones(
+                        batch_size, prefix_len, 
+                        dtype=attention_mask.dtype, 
+                        device=attention_mask.device
+                    )
+                    
+                    # Concatenate prefix mask with original mask
+                    modified_attention_mask = torch.cat([prefix_mask, attention_mask], dim=1)
+                    
+                    # Update the mask in args or kwargs
+                    if mask_idx is not None:
+                        modified_args[mask_idx] = modified_attention_mask
+                    elif 'attention_mask' in kwargs:
+                        modified_kwargs['attention_mask'] = modified_attention_mask
+                
+                # Handle other sequence-dependent tensors in kwargs
+                # Handle position_ids in kwargs
+                if 'position_ids' in kwargs and kwargs['position_ids'] is not None:
+                    position_ids = kwargs['position_ids']
+                    batch_size = position_ids.shape[0]  # Get batch size from position_ids itself
+                    
+                    # Create position ids for prefix tokens (0, 1, 2, ..., prefix_len-1)
+                    prefix_position_ids = torch.arange(
+                        prefix_len, 
+                        dtype=position_ids.dtype, 
+                        device=position_ids.device
+                    ).unsqueeze(0).expand(batch_size, -1)
+                    
+                    # Shift original position_ids by prefix_len
+                    shifted_position_ids = position_ids + prefix_len
+                    
+                    # Concatenate prefix positions with shifted original positions
+                    modified_position_ids = torch.cat([prefix_position_ids, shifted_position_ids], dim=1)
+                    modified_kwargs['position_ids'] = modified_position_ids
+                
+                # Handle cache_position in kwargs
+                if 'cache_position' in kwargs and kwargs['cache_position'] is not None:
+                    cache_position = kwargs['cache_position']
+                    
+                    # Create cache positions for prefix tokens
+                    prefix_cache_position = torch.arange(
+                        prefix_len, 
+                        dtype=cache_position.dtype, 
+                        device=cache_position.device
+                    )
+                    
+                    # Shift original cache_position by prefix_len
+                    shifted_cache_position = cache_position + prefix_len
+                    
+                    # Concatenate prefix cache positions with shifted original positions
+                    modified_cache_position = torch.cat([prefix_cache_position, shifted_cache_position], dim=0)
+                    modified_kwargs['cache_position'] = modified_cache_position
+                
+                # Handle position_embeddings (RoPE) in kwargs
+                if 'position_embeddings' in kwargs and kwargs['position_embeddings'] is not None:
+                    cos_emb, sin_emb = kwargs['position_embeddings']
+                    
+                    # For RoPE, we need to extend the cos/sin embeddings for prefix positions
+                    # The prefix positions should use the same pattern as positions 0 to prefix_len-1
+                    prefix_cos = cos_emb[:, :prefix_len, :]  # Take first prefix_len positions
+                    prefix_sin = sin_emb[:, :prefix_len, :]  # Take first prefix_len positions
+                    
+                    # Concatenate prefix embeddings with original embeddings
+                    extended_cos = torch.cat([prefix_cos, cos_emb], dim=1)
+                    extended_sin = torch.cat([prefix_sin, sin_emb], dim=1)
+                    
+                    modified_kwargs['position_embeddings'] = (extended_cos, extended_sin)
+            
+            # Call original forward method with modified arguments
+            output = self.original_forward(*modified_args, **modified_kwargs)
+        else:
+            # No prefix, call original method unchanged
+            output = self.original_forward(*args, **kwargs)
+        
+        # Remove prefix from outputs if it was added
+        if self.prefix is not None:
+            prefix_len = self.prefix.shape[1]
+            
+            try:
+                if isinstance(output, tuple) and len(output) > 0:
+                    # Modify the main output (first element of tuple)
+                    if hasattr(output[0], 'shape') and len(output[0].shape) >= 2 and output[0].shape[1] > original_seq_len:
+                        # Remove prefix tokens from the output
+                        modified_output_0 = output[0][:, prefix_len:, :]
+                        
+                        # Reconstruct the output tuple safely
+                        if len(output) == 1:
+                            # Only one element in tuple
+                            output = (modified_output_0,)
                         else:
-                            # Dimension too small or doesn't need trimming, or already processed
-                            modified_outputs.append(item)
-                    elif isinstance(item, tuple):
-                        # Handle nested tuples (like key/value pairs)
-                        nested_modified = []
-                        for subitem in item:
-                            if hasattr(subitem, 'dim') and hasattr(subitem, 'size') and subitem.dim() >= 2:
-                                if subitem.size(-2) > prefix_len:
-                                    if subitem.dim() == 4:
-                                        # [batch, heads, seq_len, head_dim] - key/value states
-                                        modified_subitem = subitem[:, :, prefix_len:]
-                                    elif subitem.dim() == 3:
-                                        # [batch, seq_len, hidden]
-                                        modified_subitem = subitem[:, prefix_len:]
-                                    else:
-                                        modified_subitem = subitem[:, prefix_len:]
-                                    nested_modified.append(modified_subitem)
-                                else:
-                                    nested_modified.append(subitem)
-                            else:
-                                nested_modified.append(subitem)
-                        modified_outputs.append(tuple(nested_modified))
-                    else:
-                        # Not a tensor or doesn't need modification
-                        modified_outputs.append(item)
-                
-                return tuple(modified_outputs)
-                
-            elif output is not None and hasattr(output, 'dim') and output.dim() >= 2:
-                # Single tensor output
-                if output.size(-2) > prefix_len:
-                    return output[:, prefix_len:]
-                else:
-                    return output
-            else:
-                return output
-                
-        except Exception as e:
-            # Fail silently to avoid breaking the model forward pass
-            # print(f"Warning: Prefix output hook failed for layer {self.layer_idx}: {e}")
-            return output
-    
-    def register_hooks(self, attention_layer):
-        """Register forward hooks on the attention layer."""
-        # Pre-hook to modify inputs
-        pre_hook = attention_layer.register_forward_pre_hook(self._modify_attention_inputs)
-        # Post-hook to modify outputs  
-        post_hook = attention_layer.register_forward_hook(self._modify_attention_outputs)
+                            # Multiple elements in tuple
+                            output = (modified_output_0,) + output[1:]
+                        
+                elif hasattr(output, 'shape') and len(output.shape) >= 2 and output.shape[1] > original_seq_len:
+                    # Single tensor output
+                    output = output[:, prefix_len:, :]
+            except Exception as e:
+                # Silent error handling - just return output unchanged
+                pass
         
-        # Store handles for cleanup
-        self.hook_handle = (pre_hook, post_hook)
-        return self.hook_handle
+        return output
     
-    def remove_hooks(self):
-        """Remove the registered hooks."""
-        if self.hook_handle is not None:
-            pre_hook, post_hook = self.hook_handle
-            pre_hook.remove()
-            post_hook.remove()
-            self.hook_handle = None
+    def restore_original(self):
+        """Restore the original forward method."""
+        self.original_attention.forward = self.original_forward
 
 class TestTimePrefixModel(nn.Module):
-    """A wrapper that adds test-time prefix generation to any transformer model using hooks."""
+    """A wrapper that adds test-time prefix generation to any transformer model using wrappers."""
     def __init__(
         self,
         base_model: PreTrainedModel,
@@ -394,26 +482,25 @@ class TestTimePrefixModel(nn.Module):
         else:
             self.current_states = None
         
-        # Setup hook-based prefix handling
-        self._setup_prefix_hooks()
+        # Setup wrapper-based prefix handling
+        self._setup_prefix_wrappers()
         
         # Set initial prefixes if provided
         if self.current_prefixes is not None:
             self._set_layer_prefixes()
     
-    def _setup_prefix_hooks(self):
-        """Setup hook-based prefix handling."""
-        self.prefix_hooks = {}
+    def _setup_prefix_wrappers(self):
+        """Setup wrapper-based prefix handling for all model architectures."""
+        self.prefix_wrappers = {}
         
         for layer_idx in self.target_layers:
             # Get the attention layer
             attention_layer = self._get_attention_layer(layer_idx)
             
-            # Use traditional hooks for all models
-            print(f"Using traditional hooks for layer {layer_idx}")
-            hook_handler = PrefixAttentionHook(layer_idx, self.base_model.config.hidden_size)
-            hook_handler.register_hooks(attention_layer)
-            self.prefix_hooks[layer_idx] = hook_handler
+            # Use generic wrapper for all models
+            print(f"Using generic wrapper for layer {layer_idx}")
+            wrapper = GenericPrefixAttentionWrapper(attention_layer, layer_idx, self)
+            self.prefix_wrappers[layer_idx] = wrapper
     
     def _get_attention_layer(self, layer_idx: int):
         """Get the attention layer for a given layer index."""
@@ -547,6 +634,8 @@ class TestTimePrefixModel(nn.Module):
         # Update prefixes using the hidden states
         return self.update_prefix_given_hidden_states(hidden_states, num_iterations)
 
+
+
     def _set_layer_prefixes(self):
         """Set prefixes for each target layer."""
         if self.current_prefixes is None:
@@ -554,12 +643,12 @@ class TestTimePrefixModel(nn.Module):
             
         for i, layer_idx in enumerate(self.target_layers):
             layer_prefix = self.current_prefixes[i]  # [batch, prefix_len, hidden]
-            self.prefix_hooks[layer_idx].set_prefix(layer_prefix)
+            self.prefix_wrappers[layer_idx].set_prefix(layer_prefix)
 
     def _clear_layer_prefixes(self):
         """Clear prefixes from all target layers without resetting current_prefixes."""
         for layer_idx in self.target_layers:
-            self.prefix_hooks[layer_idx].clear_prefix()
+            self.prefix_wrappers[layer_idx].clear_prefix()
 
     def run_base_model_with_prefixes(self, *args, **kwargs):
         """Run the base model with prefixes active."""
@@ -583,14 +672,27 @@ class TestTimePrefixModel(nn.Module):
         self.current_prefixes = None
         self.current_states = None
         
-        # Clear prefixes from hooks
+        # Clear prefixes from wrappers
         self._clear_layer_prefixes()
     
+    def set_zero_prefixes(self):
+        """Set all current prefixes to zero values for testing purposes."""
+        if self.current_prefixes is not None:
+            # Zero out existing prefixes
+            self.current_prefixes.zero_()
+            
+            # Apply zeroed prefixes to all wrapper layers
+            self._set_layer_prefixes()
+            
+            print(f"Set zero prefixes: {self.current_prefixes.shape}")
+        else:
+            print("No current prefixes to zero out. Use update_prefix_given_input() first to create prefixes.")
+    
     def cleanup(self):
-        """Clean up resources by removing hooks."""
-        for hook_handler in self.prefix_hooks.values():
-            hook_handler.remove_hooks()
-        self.prefix_hooks.clear()
+        """Clean up resources by restoring original forward methods."""
+        for wrapper in self.prefix_wrappers.values():
+            wrapper.restore_original()
+        self.prefix_wrappers.clear()
     
     def __del__(self):
         """Cleanup on deletion."""
@@ -605,18 +707,12 @@ class TestTimePrefixModel(nn.Module):
         
     def generate(self, *args, **kwargs):
         """Generate text using the base model with prefixes."""
-        # Ensure prefixes are set in hooks
+        # Ensure prefixes are set in wrappers
         self._set_layer_prefixes()
         return self.base_model.generate(*args, **kwargs)
 
 def create_test_time_prefix_config(
-    layer_selection_mode: str = "all",
-    layer_selection: Optional[Union[List[int], int]] = None,
-    hidden_size: Optional[int] = None,
-    max_iterations: int = 10,
-    gradient_steps: int = 4,
-    shared_weight_for_all_layers: bool = False,
-    use_hooks_during_prefix_update: bool = False
+    config
 ) -> TestTimePrefixConfig:
     """Create a test-time prefix configuration.
     
@@ -627,37 +723,17 @@ def create_test_time_prefix_config(
         max_iterations: Maximum iterations for prefix generation
         gradient_steps: Number of iterations to allow gradients through
         shared_weight_for_all_layers: Whether all layers share the same prefix generator
-        use_hooks_during_prefix_update: Whether to use hooks during prefix generation
+        use_hooks_during_prefix_update: Whether to use prefixes during prefix generation (legacy parameter name)
         
     Returns:
         TestTimePrefixConfig object
     """
     return TestTimePrefixConfig(
-        layer_selection_mode=layer_selection_mode,
-        layer_selection=layer_selection,
-        hidden_size=hidden_size,
-        max_iterations=max_iterations,
-        gradient_steps=gradient_steps,
-        shared_weight_for_all_layers=shared_weight_for_all_layers,
-        use_hooks_during_prefix_update=use_hooks_during_prefix_update
+        layer_selection_mode=config.get('layer_selection_mode', 'all'),
+        layer_selection=config.get('layer_selection', None),
+        hidden_size=config.get('hidden_size', None),
+        max_iterations=config.get('max_iterations', 10),
+        gradient_steps=config.get('gradient_steps', 4),
+        shared_weight_for_all_layers=config.get('shared_weight_for_all_layers', False),
+        use_hooks_during_prefix_update=config.get('use_hooks_during_prefix_update', False)
     )
-
-def add_instance_level_prefix_generator(
-    model: PreTrainedModel,
-    config: Optional[TestTimePrefixConfig] = None,
-    tokenizer: Optional[PreTrainedTokenizer] = None
-) -> TestTimePrefixModel:
-    """Decorator function to add instance-level prefix generation to a model.
-    
-    Args:
-        model: The base transformer model
-        config: Configuration for prefix generation
-        tokenizer: Optional tokenizer
-    """
-    if config is None:
-        config = create_test_time_prefix_config(
-            hidden_size=model.config.hidden_size
-        )
-    return TestTimePrefixModel(model, config, tokenizer)
-
- 

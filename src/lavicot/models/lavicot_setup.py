@@ -2,16 +2,34 @@ import torch
 from typing import Optional, Tuple
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
 
-from .lavicot_bias import (
-    add_instance_level_prefix_generator,
-    create_test_time_prefix_config,
-    TestTimePrefixModel
-)
 from ..utils.tokenizer_utils import setup_padding_token
 from ..utils.logging_utils import count_parameters
 
+from ..models.lavicot_models.lavicot_bias import TestTimeGammaBiasModel
+from ..models.lavicot_models.lavicot_bias_gamma import TestTimeGammaBiasModel
+from ..models.lavicot_models.lavicot_prefix_attention import TestTimePrefixAttentionGammaModel
 
-def setup_model_and_tokenizer(
+def get_model_class(model_type: str):
+    """Get the appropriate model class based on the model type.
+    
+    Args:
+        model_type: String specifying which model implementation to use
+        
+    Returns:
+        The appropriate TestTimePrefixModel class
+    """
+    model_classes = {
+        "lavicot_bias": TestTimeGammaBiasModel,
+        "lavicot_bias_gamma": TestTimeGammaBiasModel,
+        "lavicot_prefix_attention": TestTimePrefixAttentionGammaModel,
+    }
+    
+    if model_type not in model_classes:
+        raise ValueError(f"Unknown model type: {model_type}. Available types: {list(model_classes.keys())}")
+        
+    return model_classes[model_type]
+
+def setup_base_model_and_tokenizer(
     model_name: str,
     device: str
 ) -> Tuple[PreTrainedModel, PreTrainedTokenizer]:
@@ -33,50 +51,28 @@ def setup_model_and_tokenizer(
     return base_model, tokenizer
 
 
-def setup_prefix_generator(
+def setup_adapter_generator(
     base_model: PreTrainedModel,
+    generator_model_class,
     device: str,
-    config_dict: dict,
-    tokenizer: Optional[PreTrainedTokenizer] = None,
+    config_dict,
     initial_prefixes: Optional[torch.Tensor] = None,
-    initial_states: Optional[torch.Tensor] = None
-) -> TestTimePrefixModel:
+    initial_states: Optional[torch.Tensor] = None,
+    freeze_base_model: bool = True
+):
     """Initialize and configure the prefix generator.
     
     Args:
         base_model: The base model to wrap
         device: Device to place the model on
         config_dict: Configuration dictionary containing prefix generator settings
-        tokenizer: Optional tokenizer for the model
         initial_prefixes: Optional initial prefixes tensor [num_layers, ...]
         initial_states: Optional initial states tensor [num_layers, ...]
     """
-    # FREEZE BASE MODEL PARAMETERS - Only prefix generators should be trainable
-    print("Freezing base model parameters...")
-    frozen_count = 0
-    for name, param in base_model.named_parameters():
-        param.requires_grad = False
-        frozen_count += param.numel()
-    print(f"Froze {frozen_count:,} base model parameters")
-    
     # Get prefix generator config from config_dict
     prefix_config = config_dict.get('prefix_generator', {})
-    
-    config = create_test_time_prefix_config(
-        layer_selection_mode=prefix_config.get('layer_selection_mode', 'all'),
-        layer_selection=prefix_config.get('layer_selection', None),
-        hidden_size=prefix_config.get('rnn_hidden_size', None),
-        max_iterations=prefix_config.get('max_iterations', 10),
-        gradient_steps=prefix_config.get('gradient_steps', 4),
-        shared_weight_for_all_layers=prefix_config.get('shared_weight_for_all_layers', False),
-        use_hooks_during_prefix_update=prefix_config.get('use_hooks_during_prefix_update', False)
-    )
-    
-    model = add_instance_level_prefix_generator(
-        base_model, 
-        config, 
-        tokenizer
-    )
+
+    model = generator_model_class(base_model, prefix_config) 
     
     # Set initial prefixes and states if provided
     if initial_prefixes is not None:
@@ -86,24 +82,23 @@ def setup_prefix_generator(
     
     model.to(device)
     
+
+    if freeze_base_model:
+        # FREEZE BASE MODEL PARAMETERS - Only prefix generators should be trainable
+        print("Freezing base model parameters...")
+        frozen_count = 0
+        for name, param in base_model.named_parameters():
+            param.requires_grad = False
+            frozen_count += param.numel()
+        print(f" {frozen_count:,} base model parameters")
+
     # Count final parameters after freezing and adding prefix generators
     final_param_counts = count_parameters(model)
     
-    # Count prefix generator parameters specifically
-    prefix_generator_params = sum(p.numel() for p in model.prefix_generators.parameters())
-    
+
     print(f"\nFinal Model Configuration:")
     print(f"  Total parameters: {final_param_counts['total']:,}")
     print(f"  Trainable parameters: {final_param_counts['trainable']:,} ({(final_param_counts['trainable'] / final_param_counts['total'] * 100):.1f}%)")
     print(f"  Frozen parameters: {final_param_counts['non_trainable']:,}")
-    print(f"  Prefix generator parameters: {prefix_generator_params:,}")
-    
-    # Verify freezing worked
-    trainable_base_params = sum(p.numel() for name, p in model.named_parameters() 
-                               if name.startswith('base_model.') and p.requires_grad)
-    if trainable_base_params > 0:
-        print(f"⚠ WARNING: {trainable_base_params:,} base model parameters are still trainable!")
-    else:
-        print("✓ Base model successfully frozen")
     
     return model 

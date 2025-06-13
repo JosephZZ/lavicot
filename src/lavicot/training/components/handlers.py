@@ -145,6 +145,10 @@ class OptimizationHandler:
         self.optimizer = optimizer
         self.scheduler = scheduler
         
+        # Cache trainable parameters during initialization
+        self.trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+        print(f"Found {len(self.trainable_params)} trainable parameters")
+        
     def backward_and_optimize(self, loss: torch.Tensor, global_step: int) -> float:
         """Perform backward pass and optimization. Returns gradient norm if updated."""
         from ...utils.logging_utils import get_gradient_norm
@@ -156,10 +160,11 @@ class OptimizationHandler:
         # Update weights if we've accumulated enough gradients
         if (global_step + 1) % self.config.gradient_accumulation_steps == 0:
             # Calculate gradient norm before clipping
-            gradient_norm = get_gradient_norm(self.model, self.model.prefix_generators.parameters())
+            gradient_norm = get_gradient_norm(self.model)
             
-            # Clip gradients - only for prefix generator parameters
-            clip_grad_norm_(self.model.prefix_generators.parameters(), self.config.max_grad_norm)
+            # Clip gradients - only for trainable parameters
+            if self.trainable_params:
+                clip_grad_norm_(self.trainable_params, self.config.max_grad_norm)
             
             # Update weights
             self.optimizer.step()

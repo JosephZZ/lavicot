@@ -1,14 +1,11 @@
-from typing import List, Dict, Any, Tuple
-from transformers import AutoTokenizer, PreTrainedTokenizer
-from types import SimpleNamespace
+from dotmap import DotMap
 
-from ..models.lavicot_bias import TestTimePrefixModel
-from ..models.base_model_integration import setup_model_and_tokenizer, setup_prefix_generator
+from ..models.lavicot_setup import setup_base_model_and_tokenizer, setup_adapter_generator
 from .training_utils import get_config_value, create_optimizer, create_scheduler
 from .checkpoint_utils import load_checkpoint
+from ..models.lavicot_setup import get_model_class
 
-
-def setup_model_and_training_components(config: SimpleNamespace, device: str) -> Tuple[TestTimePrefixModel, Any, Any, PreTrainedTokenizer, int, int, float]:
+def setup_model_and_training_components(config: DotMap, device: str):
     """Setup model, optimizer, scheduler and tokenizer based on config.
     
     Args:
@@ -29,14 +26,9 @@ def setup_model_and_training_components(config: SimpleNamespace, device: str) ->
     
     if is_resuming:
         print(f"Loading model from checkpoint: {resume_checkpoint_path}")
-        model, optimizer, start_epoch, start_global_step, best_accuracy = load_checkpoint(
+        model, tokenizer,optimizer, start_epoch, start_global_step, best_accuracy = load_checkpoint(
             resume_checkpoint_path, device
         )
-        tokenizer = AutoTokenizer.from_pretrained(model.base_model.name_or_path)
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-            model.base_model.config.pad_token_id = tokenizer.eos_token_id
-        
         # Recreate scheduler for remaining training
         scheduler = create_scheduler(optimizer, config, start_epoch)
         
@@ -45,8 +37,14 @@ def setup_model_and_training_components(config: SimpleNamespace, device: str) ->
         print("Starting training from scratch...")
         # Setup model and tokenizer
         print("Loading model and tokenizer...")
-        base_model, tokenizer = setup_model_and_tokenizer(config.model_name, device)
-        model = setup_prefix_generator(base_model, device, vars(config), tokenizer)
+        base_model, tokenizer = setup_base_model_and_tokenizer(config.model_name, device)
+        
+        # Get the appropriate model class based on config
+        model_class = get_model_class(config.model_type)
+        print(f"Using model implementation: {config.model_type}")
+        
+        # Create model instance with the selected implementation
+        model = setup_adapter_generator(base_model, model_class, device, config, tokenizer)
         
         # Create optimizer and scheduler
         optimizer = create_optimizer(model, config.learning_rate)

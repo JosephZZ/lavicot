@@ -15,7 +15,7 @@ from typing import List, Dict, Any, Tuple, Optional, Union
 import time
 import wandb
 from torch.nn.utils import clip_grad_norm_
-from types import SimpleNamespace
+from dotmap import DotMap
 
 
 from ..evaluation.evaluator import evaluate_model_configurations
@@ -33,7 +33,7 @@ from .components.handlers import PrefixUpdateHandler, LossComputeHandler, Optimi
 class LaviCotTrainer:
     """LaviCot Trainer class that encapsulates training logic."""
     
-    def __init__(self, config: SimpleNamespace):
+    def __init__(self, config: DotMap):
         """Initialize the trainer with configuration."""
         self.config = config
         self.device = None

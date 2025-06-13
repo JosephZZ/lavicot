@@ -7,22 +7,6 @@ from dataclasses import dataclass
 from transformers import PreTrainedModel, PreTrainedTokenizer
 import numpy as np
 
-@dataclass
-class TestTimePrefixConfig:
-    """Configuration for test-time prefix generation."""
-    # Layer selection configuration
-    layer_selection_mode: str = "all"  # "all", "specific", "exclude", or "spread"
-    layer_selection: Optional[Union[List[int], int]] = None  # List of layers or number of layers to spread
-    
-    # Prefix generation configuration
-    hidden_size: Optional[int] = None  # If None, uses model's hidden size
-    max_iterations: int = 10
-    gradient_steps: int = 4  # Number of iterations to allow gradients through
-    shared_weight_for_all_layers: bool = True  # Whether all layers share the same prefix generator
-    
-    # Wrapper control configuration  
-    use_hooks_during_prefix_update: bool = False  # Whether to use prefixes during prefix generation (legacy name)
-
 class RMSNorm(nn.Module):
     """Root Mean Square Layer Normalization."""
     def __init__(self, dim: int, eps: float = 1e-6):
@@ -38,7 +22,7 @@ class RMSNorm(nn.Module):
 
 class PrefixGenerator(nn.Module):
     """Prefix generator using iterative attention and MLP."""
-    def __init__(self, config: TestTimePrefixConfig, model_hidden_size: int):
+    def __init__(self, config, model_hidden_size: int):
         super().__init__()
         self.hidden_size = config.hidden_size or model_hidden_size
         self.model_hidden_size = model_hidden_size
@@ -148,7 +132,7 @@ class PrefixGenerator(nn.Module):
 
 
 
-class GenericPrefixAttentionWrapper:
+class PrefixAttentionGammaModel:
     """Generic wrapper for attention layers that handles prefix injection via monkey patching.
     
     Works with different model architectures by automatically detecting the forward signature.
@@ -192,238 +176,61 @@ class GenericPrefixAttentionWrapper:
         self.prefix = None
     
     def wrapped_forward(self, *args, **kwargs):
-        """Generic wrapped forward method that adapts to different attention signatures."""
+        """
+        Wrapper for attention forward that applies prefix as bias to output hidden states.
         
-        # Handle keyword-only arguments (newer Qwen models)
-        if len(args) == 0 and 'hidden_states' in kwargs:
-            # Modern approach: all arguments are keyword arguments
-            hidden_states = kwargs['hidden_states']
-        elif len(args) > 0:
-            # Traditional approach: hidden_states is first positional argument
-            hidden_states = args[0]
-        else:
-            # No hidden_states found, call original method
-            return self.original_forward(*args, **kwargs)
+        This method intercepts the forward call to any attention layer and:
+        1. Calls the original attention forward method
+        2. Adds prefix bias to the output hidden states
         
-        # Safety check: ensure hidden_states is a tensor with the expected shape
-        if not hasattr(hidden_states, 'shape') or len(hidden_states.shape) < 2:
-            return self.original_forward(*args, **kwargs)
+        Supports both traditional positional arguments and modern keyword-only arguments.
+        The bias approach is much simpler than concatenation as it doesn't change sequence length.
+        """
         
-        original_seq_len = hidden_states.shape[1]
+        # First, call the original forward method to get the output
+        output = self.original_forward(*args, **kwargs)
         
-        # Process arguments based on detected model type
+        # Apply prefix as bias to the output if present
         if self.prefix is not None:
-            # Convert prefix to match hidden states
-            prefix_converted = self.prefix.to(
-                dtype=hidden_states.dtype, 
-                device=hidden_states.device
+            # Convert prefix to match output's dtype and device
+            if isinstance(output, tuple):
+                reference_tensor = output[0]
+            else:
+                reference_tensor = output
+                
+            prefix_bias = self.prefix.to(
+                dtype=reference_tensor.dtype, 
+                device=reference_tensor.device
             )
             
-            # Concatenate prefix with hidden states
-            modified_hidden_states = torch.cat([prefix_converted, hidden_states], dim=1)
-            prefix_len = prefix_converted.shape[1]
+            # Calculate norms for rescaling
+            # Get hidden states (first element of output)
+            hidden_states = reference_tensor
             
-            # Handle both args and kwargs based calling style
-            modified_args = list(args)
-            modified_kwargs = kwargs.copy()
+            # Calculate norm for each position: [batch_size, seq_len, 1]
+            hidden_states_norm = torch.norm(hidden_states, dim=-1, keepdim=True).mean()  # [4, 384, 1]
             
-            if len(args) == 0 and 'hidden_states' in kwargs:
-                # Keyword-only style (modern Qwen)
-                modified_kwargs['hidden_states'] = modified_hidden_states
-                
-                # Handle attention mask in kwargs
-                if 'attention_mask' in kwargs and kwargs['attention_mask'] is not None:
-                    attention_mask = kwargs['attention_mask']
-                    batch_size = hidden_states.shape[0]
-                    
-                    # Create mask for prefix tokens (all ones)
-                    prefix_mask = torch.ones(
-                        batch_size, prefix_len, 
-                        dtype=attention_mask.dtype, 
-                        device=attention_mask.device
-                    )
-                    
-                    # Concatenate prefix mask with original mask
-                    modified_attention_mask = torch.cat([prefix_mask, attention_mask], dim=1)
-                    modified_kwargs['attention_mask'] = modified_attention_mask
-                
-                # Handle position_ids in kwargs
-                if 'position_ids' in kwargs and kwargs['position_ids'] is not None:
-                    position_ids = kwargs['position_ids']
-                    batch_size = position_ids.shape[0]  # Get batch size from position_ids itself
-                    
-                    # Create position ids for prefix tokens (0, 1, 2, ..., prefix_len-1)
-                    prefix_position_ids = torch.arange(
-                        prefix_len, 
-                        dtype=position_ids.dtype, 
-                        device=position_ids.device
-                    ).unsqueeze(0)
-                    
-                    # Shift original position_ids by prefix_len
-                    shifted_position_ids = position_ids + prefix_len
-                    
-                    # Concatenate prefix positions with shifted original positions
-                    modified_position_ids = torch.cat([prefix_position_ids, shifted_position_ids], dim=1)
-                    modified_kwargs['position_ids'] = modified_position_ids
-                
-                # Handle cache_position in kwargs
-                if 'cache_position' in kwargs and kwargs['cache_position'] is not None:
-                    cache_position = kwargs['cache_position']
-                    
-                    # Create cache positions for prefix tokens
-                    prefix_cache_position = torch.arange(
-                        prefix_len, 
-                        dtype=cache_position.dtype, 
-                        device=cache_position.device
-                    )
-                    
-                    # Shift original cache_position by prefix_len
-                    shifted_cache_position = cache_position + prefix_len
-                    
-                    # Concatenate prefix cache positions with shifted original positions
-                    modified_cache_position = torch.cat([prefix_cache_position, shifted_cache_position], dim=0)
-                    modified_kwargs['cache_position'] = modified_cache_position
-                
-                # Handle position_embeddings (RoPE) in kwargs
-                if 'position_embeddings' in kwargs and kwargs['position_embeddings'] is not None:
-                    cos_emb, sin_emb = kwargs['position_embeddings']
-                    
-                    # For RoPE, we need to extend the cos/sin embeddings for prefix positions
-                    # The prefix positions should use the same pattern as positions 0 to prefix_len-1
-                    prefix_cos = cos_emb[:, :prefix_len, :]  # Take first prefix_len positions
-                    prefix_sin = sin_emb[:, :prefix_len, :]  # Take first prefix_len positions
-                    
-                    # Concatenate prefix embeddings with original embeddings
-                    extended_cos = torch.cat([prefix_cos, cos_emb], dim=1)
-                    extended_sin = torch.cat([prefix_sin, sin_emb], dim=1)
-                    
-                    modified_kwargs['position_embeddings'] = (extended_cos, extended_sin)
-                    
+            # Calculate norm of prefix bias: [batch_size, 1, 1]
+            prefix_bias_norm = torch.norm(prefix_bias, dim=-1, keepdim=True).mean()  # [batch_size, 1, 1]
+            
+            # Rescale prefix bias to be 0.03 times the mean hidden states norm
+            target_norm = 0.03 * hidden_states_norm  # scalar (mean across all positions)
+            
+            # Calculate scale factor (avoid division by zero)
+            if prefix_bias_norm.item() > 1e-8:
+                scale_factor = target_norm / prefix_bias_norm.item()  # scalar
             else:
-                # Positional args style (traditional)
-                modified_args[0] = modified_hidden_states
-                
-                # Handle attention mask in args or kwargs
-                attention_mask = None
-                mask_idx = None
-                
-                if self.model_type == 'qwen' and len(args) >= 3:
-                    attention_mask = args[2]
-                    mask_idx = 2
-                elif 'attention_mask' in kwargs:
-                    attention_mask = kwargs['attention_mask']
-                elif len(args) > 1:
-                    # Try to find attention mask in positional args
-                    for i, arg in enumerate(args[1:], 1):
-                        if hasattr(arg, 'shape') and arg.dim() >= 2 and arg.shape[-1] == hidden_states.shape[1]:
-                            attention_mask = arg
-                            mask_idx = i
-                            break
-                
-                # Modify attention mask if found
-                if attention_mask is not None:
-                    batch_size = hidden_states.shape[0]
-                    
-                    # Create mask for prefix tokens (all ones)
-                    prefix_mask = torch.ones(
-                        batch_size, prefix_len, 
-                        dtype=attention_mask.dtype, 
-                        device=attention_mask.device
-                    )
-                    
-                    # Concatenate prefix mask with original mask
-                    modified_attention_mask = torch.cat([prefix_mask, attention_mask], dim=1)
-                    
-                    # Update the mask in args or kwargs
-                    if mask_idx is not None:
-                        modified_args[mask_idx] = modified_attention_mask
-                    elif 'attention_mask' in kwargs:
-                        modified_kwargs['attention_mask'] = modified_attention_mask
-                
-                # Handle other sequence-dependent tensors in kwargs
-                # Handle position_ids in kwargs
-                if 'position_ids' in kwargs and kwargs['position_ids'] is not None:
-                    position_ids = kwargs['position_ids']
-                    batch_size = position_ids.shape[0]  # Get batch size from position_ids itself
-                    
-                    # Create position ids for prefix tokens (0, 1, 2, ..., prefix_len-1)
-                    prefix_position_ids = torch.arange(
-                        prefix_len, 
-                        dtype=position_ids.dtype, 
-                        device=position_ids.device
-                    ).unsqueeze(0).expand(batch_size, -1)
-                    
-                    # Shift original position_ids by prefix_len
-                    shifted_position_ids = position_ids + prefix_len
-                    
-                    # Concatenate prefix positions with shifted original positions
-                    modified_position_ids = torch.cat([prefix_position_ids, shifted_position_ids], dim=1)
-                    modified_kwargs['position_ids'] = modified_position_ids
-                
-                # Handle cache_position in kwargs
-                if 'cache_position' in kwargs and kwargs['cache_position'] is not None:
-                    cache_position = kwargs['cache_position']
-                    
-                    # Create cache positions for prefix tokens
-                    prefix_cache_position = torch.arange(
-                        prefix_len, 
-                        dtype=cache_position.dtype, 
-                        device=cache_position.device
-                    )
-                    
-                    # Shift original cache_position by prefix_len
-                    shifted_cache_position = cache_position + prefix_len
-                    
-                    # Concatenate prefix cache positions with shifted original positions
-                    modified_cache_position = torch.cat([prefix_cache_position, shifted_cache_position], dim=0)
-                    modified_kwargs['cache_position'] = modified_cache_position
-                
-                # Handle position_embeddings (RoPE) in kwargs
-                if 'position_embeddings' in kwargs and kwargs['position_embeddings'] is not None:
-                    cos_emb, sin_emb = kwargs['position_embeddings']
-                    
-                    # For RoPE, we need to extend the cos/sin embeddings for prefix positions
-                    # The prefix positions should use the same pattern as positions 0 to prefix_len-1
-                    prefix_cos = cos_emb[:, :prefix_len, :]  # Take first prefix_len positions
-                    prefix_sin = sin_emb[:, :prefix_len, :]  # Take first prefix_len positions
-                    
-                    # Concatenate prefix embeddings with original embeddings
-                    extended_cos = torch.cat([prefix_cos, cos_emb], dim=1)
-                    extended_sin = torch.cat([prefix_sin, sin_emb], dim=1)
-                    
-                    modified_kwargs['position_embeddings'] = (extended_cos, extended_sin)
+                scale_factor = 0.01
             
-            # Call original forward method with modified arguments
-            output = self.original_forward(*modified_args, **modified_kwargs)
-        else:
-            # No prefix, call original method unchanged
-            output = self.original_forward(*args, **kwargs)
-        
-        # Remove prefix from outputs if it was added
-        if self.prefix is not None:
-            prefix_len = self.prefix.shape[1]
-            
-            try:
-                if isinstance(output, tuple) and len(output) > 0:
-                    # Modify the main output (first element of tuple)
-                    if hasattr(output[0], 'shape') and len(output[0].shape) >= 2 and output[0].shape[1] > original_seq_len:
-                        # Remove prefix tokens from the output
-                        modified_output_0 = output[0][:, prefix_len:, :]
-                        
-                        # Reconstruct the output tuple safely
-                        if len(output) == 1:
-                            # Only one element in tuple
-                            output = (modified_output_0,)
-                        else:
-                            # Multiple elements in tuple
-                            output = (modified_output_0,) + output[1:]
-                        
-                elif hasattr(output, 'shape') and len(output.shape) >= 2 and output.shape[1] > original_seq_len:
-                    # Single tensor output
-                    output = output[:, prefix_len:, :]
-            except Exception as e:
-                # Silent error handling - just return output unchanged
-                pass
+            # Add prefix bias to output
+            # assuming prefix_bias shape: [batch_size, 1, hidden_size]
+            # Apply bias directly to output
+            if isinstance(output, tuple):
+                # Modify first element (hidden_states) and keep other outputs unchanged
+                output = (output[0] * (1-scale_factor) + prefix_bias * scale_factor,) + output[1:]
+            else:
+                # Direct tensor output
+                output = output * (1-scale_factor) + prefix_bias * scale_factor
         
         return output
     
@@ -431,12 +238,12 @@ class GenericPrefixAttentionWrapper:
         """Restore the original forward method."""
         self.original_attention.forward = self.original_forward
 
-class TestTimePrefixModel(nn.Module):
+class TestTimePrefixAttentionGammaModel(nn.Module):
     """A wrapper that adds test-time prefix generation to any transformer model using wrappers."""
     def __init__(
         self,
         base_model: PreTrainedModel,
-        config: TestTimePrefixConfig,
+        config,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         initial_prefixes: Optional[torch.Tensor] = None,
         initial_states: Optional[torch.Tensor] = None
@@ -548,11 +355,9 @@ class TestTimePrefixModel(nn.Module):
                 raise ValueError(f"Cannot spread {num_layers} layers across {total_layers} total layers")
             
             # Calculate gap between layers
-            gap = total_layers / num_layers
-            # Start at gap/2 to center the layers
-            start = int(gap / 2)
-            # Generate evenly spaced indices
-            return [int(start + i * gap) for i in range(num_layers)]
+            gap = int(total_layers / num_layers)
+            # apply layers every gap layers backward from the last layer
+            return [int(total_layers-1 - i*gap) for i in range(num_layers)]
         
         else:
             raise ValueError(f"Unknown layer selection mode: {self.config.layer_selection_mode}")
@@ -710,54 +515,3 @@ class TestTimePrefixModel(nn.Module):
         # Ensure prefixes are set in wrappers
         self._set_layer_prefixes()
         return self.base_model.generate(*args, **kwargs)
-
-def create_test_time_prefix_config(
-    layer_selection_mode: str = "all",
-    layer_selection: Optional[Union[List[int], int]] = None,
-    hidden_size: Optional[int] = None,
-    max_iterations: int = 10,
-    gradient_steps: int = 4,
-    shared_weight_for_all_layers: bool = False,
-    use_hooks_during_prefix_update: bool = False
-) -> TestTimePrefixConfig:
-    """Create a test-time prefix configuration.
-    
-    Args:
-        layer_selection_mode: How to select layers ("all", "specific", "exclude", "spread")
-        layer_selection: List of layer indices or number of layers to spread
-        hidden_size: Hidden size for prefix generator (uses model's if None)
-        max_iterations: Maximum iterations for prefix generation
-        gradient_steps: Number of iterations to allow gradients through
-        shared_weight_for_all_layers: Whether all layers share the same prefix generator
-        use_hooks_during_prefix_update: Whether to use prefixes during prefix generation (legacy parameter name)
-        
-    Returns:
-        TestTimePrefixConfig object
-    """
-    return TestTimePrefixConfig(
-        layer_selection_mode=layer_selection_mode,
-        layer_selection=layer_selection,
-        hidden_size=hidden_size,
-        max_iterations=max_iterations,
-        gradient_steps=gradient_steps,
-        shared_weight_for_all_layers=shared_weight_for_all_layers,
-        use_hooks_during_prefix_update=use_hooks_during_prefix_update
-    )
-
-def add_instance_level_prefix_generator(
-    model: PreTrainedModel,
-    config: Optional[TestTimePrefixConfig] = None,
-    tokenizer: Optional[PreTrainedTokenizer] = None
-) -> TestTimePrefixModel:
-    """Decorator function to add instance-level prefix generation to a model.
-    
-    Args:
-        model: The base transformer model
-        config: Configuration for prefix generation
-        tokenizer: Optional tokenizer
-    """
-    if config is None:
-        config = create_test_time_prefix_config(
-            hidden_size=model.config.hidden_size
-        )
-    return TestTimePrefixModel(model, config, tokenizer) 

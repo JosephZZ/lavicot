@@ -1,5 +1,6 @@
 # Model configuration
 model_name: "Qwen/Qwen2.5-0.5B-Instruct"
+model_type: "lavicot_bias_gamma"  # Options: "lavicot_bias", "lavicot_bias_gamma", "lavicot_prefix_attention"
 base_output_dir: "outputs/lavicot_prefix"
 resume_checkpoint_path: null
 

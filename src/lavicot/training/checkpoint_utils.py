@@ -1,15 +1,14 @@
 import os
 import torch
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Callable
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from types import SimpleNamespace
 
-from ..models.lavicot_bias import TestTimePrefixModel
 from .training_utils import create_optimizer
 
 
 def save_checkpoint(
-    model: TestTimePrefixModel,
+    model,
     optimizer: torch.optim.Optimizer,
     epoch: int,
     global_step: int,
@@ -117,7 +116,7 @@ def find_latest_checkpoint_folder(base_output_dir: str) -> Optional[str]:
     return checkpoint_folders[-1][1]
 
 
-def debug_optimizer_parameter_compatibility(model: TestTimePrefixModel, checkpoint: dict) -> bool:
+def debug_optimizer_parameter_compatibility(model, checkpoint: dict) -> bool:
     """Debug and check compatibility between current model and saved optimizer state.
     
     Args:
@@ -176,8 +175,9 @@ def debug_optimizer_parameter_compatibility(model: TestTimePrefixModel, checkpoi
 
 def load_checkpoint(
     checkpoint_path: str,
-    device: torch.device
-) -> Tuple[TestTimePrefixModel, torch.optim.Optimizer, int, int, float]:
+    device: torch.device,
+    adapter_generator_class: Callable,
+):
     """Load a training checkpoint.
     
     Args:
@@ -199,10 +199,9 @@ def load_checkpoint(
     tokenizer = AutoTokenizer.from_pretrained(checkpoint["base_model_name"])
     
     # Create model with saved config
-    model = TestTimePrefixModel(
+    model = adapter_generator_class(
         base_model=base_model,
         config=checkpoint["config"],
-        tokenizer=tokenizer
     ).to(device)
     
     # Load prefix generator state
@@ -242,4 +241,4 @@ def load_checkpoint(
     global_step = checkpoint["global_step"]
     best_accuracy = checkpoint["best_accuracy"]
     
-    return model, optimizer, epoch, global_step, best_accuracy 
+    return model, tokenizer, optimizer, epoch, global_step, best_accuracy 

@@ -13,7 +13,7 @@ from datasets import load_dataset
 
 # Path is handled by pytest configuration
 
-from src.lavicot.models.base_model_integration import setup_model_and_tokenizer, setup_prefix_generator
+from src.lavicot.models.lavicot_setup import setup_model_and_tokenizer, setup_adapter_generator
 from src.lavicot.utils.data_utils import prepare_batch
 from src.lavicot.config.config_loader import load_config
 
@@ -96,7 +96,7 @@ def test_parameter_freezing():
     
     # Load model with prefix generators (should freeze base model)
     base_model, tokenizer = setup_model_and_tokenizer(config.model_name, device)
-    model = setup_prefix_generator(base_model, device, vars(config), tokenizer)
+    model = setup_adapter_generator(base_model, device, vars(config), tokenizer)
     
     # Analyze parameters
     total_params = 0

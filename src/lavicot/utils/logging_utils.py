@@ -10,9 +10,8 @@ import re
 import os
 import datetime
 import wandb
-from types import SimpleNamespace
+from dotmap import DotMap
 
-from ..models.lavicot_bias import TestTimePrefixModel
 
 
 def get_partial_sequence(sequence: str, max_length: int, proportion: float = 0.5) -> Tuple[str, int]:
@@ -40,19 +39,10 @@ def get_gpu_memory_usage() -> float:
         return torch.cuda.memory_allocated() / 1024**2
     return 0
 
-def get_gradient_norm(model: nn.Module, parameters=None) -> float:
-    """Calculate the total gradient norm across specified parameters.
-    
-    Args:
-        model: The model to calculate gradient norm for
-        parameters: Optional iterable of parameters to check. If None, uses all model parameters.
-    
-    Returns:
-        Total gradient norm
-    """
+def get_gradient_norm(model: nn.Module) -> float:
+    """Calculate the total gradient norm across all parameters."""
     total_norm = 0.0
-    param_iter = parameters if parameters is not None else model.parameters()
-    for p in param_iter:
+    for p in model.parameters():
         if p.grad is not None:
             param_norm = p.grad.data.norm(2)
             total_norm += param_norm.item() ** 2
@@ -67,31 +57,51 @@ def get_parameter_norm(model: nn.Module) -> float:
             total_norm += param_norm.item() ** 2
     return total_norm ** 0.5
 
-def get_token_statistics(logits: torch.Tensor, labels: torch.Tensor) -> Dict[str, float]:
-    """Calculate token-level statistics."""
-    predictions = torch.argmax(logits, dim=-1)
-    correct = (predictions == labels).float().mean().item()
+def get_token_statistics(tokenizer, input_ids: torch.Tensor) -> Dict[str, float]:
+    """Calculate token statistics for a batch of input IDs."""
+    # Convert to list of token IDs
+    if isinstance(input_ids, torch.Tensor):
+        input_ids = input_ids.cpu().numpy()
     
-    # Calculate perplexity
-    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), labels.view(-1))
-    perplexity = torch.exp(loss).item()
+    # Flatten and get unique tokens
+    all_tokens = input_ids.flatten()
+    unique_tokens = np.unique(all_tokens)
     
-    # Calculate token distribution statistics
-    token_probs = F.softmax(logits, dim=-1)
-    entropy = -(token_probs * torch.log(token_probs + 1e-10)).sum(dim=-1).mean().item()
+    # Calculate statistics
+    total_tokens = len(all_tokens)
+    unique_token_count = len(unique_tokens)
+    
+    # Get token frequencies
+    token_freqs = {}
+    for token_id in unique_tokens:
+        count = np.sum(all_tokens == token_id)
+        token_freqs[token_id] = count / total_tokens
+    
+    # Sort by frequency
+    sorted_tokens = sorted(token_freqs.items(), key=lambda x: x[1], reverse=True)
+    
+    # Get top 10 tokens
+    top_tokens = []
+    for token_id, freq in sorted_tokens[:10]:
+        try:
+            token = tokenizer.decode([token_id])
+            top_tokens.append((token, freq))
+        except:
+            top_tokens.append((f"<{token_id}>", freq))
     
     return {
-        "token_accuracy": correct,
-        "perplexity": perplexity,
-        "token_entropy": entropy
+        "total_tokens": total_tokens,
+        "unique_tokens": unique_token_count,
+        "token_diversity": unique_token_count / total_tokens,
+        "top_tokens": top_tokens
     }
 
-def get_config_value(config: SimpleNamespace, key: str, default=None):
+def get_config_value(config: DotMap, key: str, default=None):
     """Safely get a config value with a default fallback."""
-    return getattr(config, key, default)
+    return config.get(key, default)
 
 
-def initialize_wandb_tracking(config: SimpleNamespace, model: TestTimePrefixModel) -> None:
+def initialize_wandb_tracking(config: DotMap, model) -> None:
     """Initialize WandB tracking if enabled.
     
     Args:
@@ -134,7 +144,7 @@ def initialize_wandb_tracking(config: SimpleNamespace, model: TestTimePrefixMode
                     entity=get_config_value(config, 'wandb_entity', None),
                     id=wandb_resume_id,
                     resume="must",
-                    config=vars(config)
+                    config=config.toDict()
                 )
                 print(f"Resumed wandb run with ID: {wandb_resume_id}")
             else:
@@ -143,7 +153,7 @@ def initialize_wandb_tracking(config: SimpleNamespace, model: TestTimePrefixMode
                     project=get_config_value(config, 'wandb_project', 'lavicot'),
                     entity=get_config_value(config, 'wandb_entity', None),
                     name=config.wandb_run_name,
-                    config=vars(config)
+                    config=config.toDict()
                 )
                 print(f"Started new wandb run with existing name: {config.wandb_run_name}")
         except Exception as e:
@@ -153,7 +163,7 @@ def initialize_wandb_tracking(config: SimpleNamespace, model: TestTimePrefixMode
                 project=get_config_value(config, 'wandb_project', 'lavicot'),
                 entity=get_config_value(config, 'wandb_entity', None),
                 name=config.wandb_run_name,
-                config=vars(config)
+                config=config.toDict()
             )
     else:
         # Initialize new wandb run
@@ -185,7 +195,7 @@ def initialize_wandb_tracking(config: SimpleNamespace, model: TestTimePrefixMode
             project=get_config_value(config, 'wandb_project', 'lavicot'),
             entity=get_config_value(config, 'wandb_entity', None),
             name=config.wandb_run_name,
-            config=vars(config)
+            config=config.toDict()
         )
         
         # Save wandb run ID for future resumption
@@ -194,7 +204,7 @@ def initialize_wandb_tracking(config: SimpleNamespace, model: TestTimePrefixMode
                 f.write(wandb.run.id)
 
 
-def print_training_configuration(config: SimpleNamespace, train_indices: List[int], eval_instances: List[Dict], full_eval_instances: List[Dict], start_global_step: int) -> None:
+def print_training_configuration(config: DotMap, train_indices: List[int], eval_instances: List[Dict], full_eval_instances: List[Dict], start_global_step: int) -> None:
     """Print comprehensive training configuration information.
     
     Args:

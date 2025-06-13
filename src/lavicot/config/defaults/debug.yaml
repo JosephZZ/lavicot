@@ -1,5 +1,6 @@
 # Debug configuration for fast testing
-model_name: "Qwen/Qwen2.5-7B-Instruct"
+model_name: "Qwen/Qwen2.5-0.5B-Instruct"
+model_type: "lavicot_bias_gamma"  # Options: "lavicot_bias", "lavicot_bias_gamma", "lavicot_prefix_attention"
 base_output_dir: "./lavicot/outputs/debug"
 resume_checkpoint_path: null
 

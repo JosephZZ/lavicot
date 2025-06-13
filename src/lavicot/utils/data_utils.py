@@ -4,8 +4,10 @@ import torch
 import random
 from datasets import load_dataset, Dataset
 from datasets.dataset_dict import DatasetDict
-from types import SimpleNamespace
-import random
+import os
+import json
+import numpy as np
+from dotmap import DotMap
 
 
 # Load and prep dataset
@@ -200,7 +202,7 @@ def prepare_batch(
         return batch_inputs
     
 
-def prepare_datasets_and_samples(config: SimpleNamespace) -> Tuple[List[int], List[Dict], List[Dict], Any, Any]:
+def prepare_datasets_and_samples(config: DotMap) -> Tuple[List[int], List[Dict], List[Dict], Any, Any]:
     """Load datasets and prepare training/evaluation samples.
     
     Args:
