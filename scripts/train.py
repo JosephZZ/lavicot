@@ -67,7 +67,7 @@ def parse_config_overrides(unknown_args):
 def main():
     """Main entry point for training."""
     parser = argparse.ArgumentParser(description="Train LaViCoT model")
-    parser.add_argument("--config", type=str, default='./src/lavicot/config/defaults/debug.yaml',
+    parser.add_argument("--config", type=str, default='./src/lavicot/config/defaults/default.yaml',
                        help="Path to configuration file")
     parser.add_argument("--dataset", type=str, default=None,
                        help="Dataset configuration name (e.g., 'gsm8k', 'math')")

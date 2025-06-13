@@ -150,7 +150,7 @@ class LaviCotTrainer:
         
         # 4. Log metrics if gradients were updated
         if (self.global_step + 1) % self.config.gradient_accumulation_steps == 0:
-            self._log_training_metrics(loss, gradient_norm)
+            self._log_metrics(loss, gradient_norm)
         
         # 5. Evaluate if needed
         if (self.global_step + 1) % self.config.eval_steps == 0:
@@ -164,11 +164,13 @@ class LaviCotTrainer:
         
 
             
-    def _log_training_metrics(self, loss: torch.Tensor, gradient_norm: float):
+    def _log_metrics(self, loss: torch.Tensor, gradient_norm: float):
         """Log training metrics to wandb."""
         if self.config.use_wandb:
             current_rounds = self.prefix_handler._get_current_rounds()
-            wandb.log({
+            
+            # Base metrics
+            metrics = {
                 "train/loss": loss.item(),
                 "train/learning_rate": self.scheduler.get_last_lr()[0],
                 "train/gradient_norm": gradient_norm,
@@ -176,7 +178,26 @@ class LaviCotTrainer:
                 "train/gpu_memory": get_gpu_memory_usage(),
                 "train/rounds": current_rounds,
                 "train/global_step": self.global_step
-            })
+            }
+            
+            # Check if model has gamma parameters
+            if hasattr(self.model, 'gamma') and isinstance(self.model.gamma, torch.nn.Parameter):
+                # Create a custom plot for gamma values
+                gamma_data = [[self.global_step, gamma.item(), i] 
+                            for i, gamma in enumerate(self.model.gamma)]
+                gamma_table = wandb.Table(
+                    data=gamma_data,
+                    columns=["step", "gamma", "layer"]
+                )
+                metrics["train/gamma_plot"] = wandb.plot.line_series(
+                    xs=[self.global_step] * len(self.model.gamma),
+                    ys=[[gamma.item() for gamma in self.model.gamma]],
+                    keys=["gamma"],
+                    title="Gamma Values by Layer"
+                )
+            
+            wandb.log(metrics)
+            
             
     def _evaluate_during_training(self):
         """Perform evaluation during training."""

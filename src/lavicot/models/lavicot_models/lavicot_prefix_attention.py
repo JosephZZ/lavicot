@@ -6,144 +6,145 @@ from typing import List, Optional, Tuple, Union, Callable
 from dataclasses import dataclass
 from transformers import PreTrainedModel, PreTrainedTokenizer
 import numpy as np
+from ..adapter_base_generator_methods.looped_tf_query_generator import LoopedTransformerQueryGenerator
 
-class RMSNorm(nn.Module):
-    """Root Mean Square Layer Normalization."""
-    def __init__(self, dim: int, eps: float = 1e-6):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
+# class RMSNorm(nn.Module):
+#     """Root Mean Square Layer Normalization."""
+#     def __init__(self, dim: int, eps: float = 1e-6):
+#         super().__init__()
+#         self.eps = eps
+#         self.weight = nn.Parameter(torch.ones(dim))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Calculate RMS
-        rms = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-        # Normalize and scale
-        return x * rms * self.weight
+#     def forward(self, x: torch.Tensor) -> torch.Tensor:
+#         # Calculate RMS
+#         rms = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+#         # Normalize and scale
+#         return x * rms * self.weight
 
-class PrefixGenerator(nn.Module):
-    """Prefix generator using iterative attention and MLP."""
-    def __init__(self, config, model_hidden_size: int):
-        super().__init__()
-        self.hidden_size = config.hidden_size or model_hidden_size
-        self.model_hidden_size = model_hidden_size
-        self.gradient_steps = config.gradient_steps
+# class LoopedTransformerQueryGenerator(nn.Module):
+#     """Prefix generator using iterative attention and MLP."""
+#     def __init__(self, config, model_hidden_size: int):
+#         super().__init__()
+#         self.hidden_size = config.hidden_size or model_hidden_size
+#         self.model_hidden_size = model_hidden_size
+#         self.gradient_steps = config.gradient_steps
         
-        # Cross attention
-        self.query = nn.Linear(self.hidden_size, self.hidden_size)
-        self.key = nn.Linear(self.hidden_size, self.hidden_size)
-        self.value = nn.Linear(self.hidden_size, self.hidden_size)
+#         # Cross attention
+#         self.query = nn.Linear(self.hidden_size, self.hidden_size)
+#         self.key = nn.Linear(self.hidden_size, self.hidden_size)
+#         self.value = nn.Linear(self.hidden_size, self.hidden_size)
         
-        # MLP for transforming cross-attended context
-        self.mlp = nn.Sequential(
-            nn.Linear(self.hidden_size, 4 * self.hidden_size),
-            nn.GELU(),
-            nn.Linear(4 * self.hidden_size, self.hidden_size)
-        )
+#         # MLP for transforming cross-attended context
+#         self.mlp = nn.Sequential(
+#             nn.Linear(self.hidden_size, 4 * self.hidden_size),
+#             nn.GELU(),
+#             nn.Linear(4 * self.hidden_size, self.hidden_size)
+#         )
         
-        # Output projection back to model's hidden size
-        self.state_projection = nn.Linear(self.hidden_size, model_hidden_size)
+#         # Output projection back to model's hidden size
+#         self.state_projection = nn.Linear(self.hidden_size, model_hidden_size)
         
-        # Layer normalizations
-        self.norm1 = RMSNorm(self.hidden_size)  # Pre-norm for cross-attention
-        self.norm2 = RMSNorm(self.hidden_size)  # Pre-norm for MLP
-        self.norm3 = RMSNorm(self.hidden_size)  # Final norm before projection
-        self.output_norm = RMSNorm(model_hidden_size)  # Final norm after projection
+#         # Layer normalizations
+#         self.norm1 = RMSNorm(self.hidden_size)  # Pre-norm for cross-attention
+#         self.norm2 = RMSNorm(self.hidden_size)  # Pre-norm for MLP
+#         self.norm3 = RMSNorm(self.hidden_size)  # Final norm before projection
+#         self.output_norm = RMSNorm(model_hidden_size)  # Final norm after projection
 
-    def state_to_prefix_projection(self, s: torch.Tensor) -> torch.Tensor:
-        """Project the state to the model's hidden size."""
-        return self.output_norm(self.state_projection(self.norm3(s)))
+#     def state_to_prefix_projection(self, s: torch.Tensor) -> torch.Tensor:
+#         """Project the state to the model's hidden size."""
+#         return self.output_norm(self.state_projection(self.norm3(s)))
         
-    def forward(
-        self,
-        num_iterations: int = None,
-        context: Optional[torch.Tensor] = None,
-        initial_state: Optional[torch.Tensor] = None
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass to generate prefixes.
+#     def forward(
+#         self,
+#         num_iterations: int = None,
+#         context: Optional[torch.Tensor] = None,
+#         initial_state: Optional[torch.Tensor] = None
+#     ) -> Tuple[torch.Tensor, torch.Tensor]:
+#         """Forward pass to generate prefixes.
         
-        Args:
-            num_iterations: Number of iterations to perform
-            context: Context sequence tensor [batch_size, seq_len, hidden_size]
-            initial_state: Optional initial state tensor [batch_size, hidden_size]
+#         Args:
+#             num_iterations: Number of iterations to perform
+#             context: Context sequence tensor [batch_size, seq_len, hidden_size]
+#             initial_state: Optional initial state tensor [batch_size, hidden_size]
             
-        Returns:
-            Tuple of (outputs, final_state)
-            - outputs: [batch_size, num_iterations, hidden_size]
-            - final_state: [batch_size, hidden_size]
-        """
-        batch_size = 1  # Single batch for prefix generation
-        dtype = next(self.parameters()).dtype
-        device = next(self.parameters()).device
+#         Returns:
+#             Tuple of (outputs, final_state)
+#             - outputs: [batch_size, num_iterations, hidden_size]
+#             - final_state: [batch_size, hidden_size]
+#         """
+#         batch_size = 1  # Single batch for prefix generation
+#         dtype = next(self.parameters()).dtype
+#         device = next(self.parameters()).device
         
-        # Initialize state from provided initial state or scaled Gaussian
-        if initial_state is not None:
-            s = initial_state.to(device=device, dtype=dtype)
-        else:
-            # Use principled initialization scaled by sqrt(hidden_size)
-            init_std = 1.0 / np.sqrt(self.hidden_size)
-            s = torch.randn(
-                batch_size,
-                self.hidden_size,
-                device=device,
-                dtype=dtype
-            ) * init_std
+#         # Initialize state from provided initial state or scaled Gaussian
+#         if initial_state is not None:
+#             s = initial_state.to(device=device, dtype=dtype)
+#         else:
+#             # Use principled initialization scaled by sqrt(hidden_size)
+#             init_std = 1.0 / np.sqrt(self.hidden_size)
+#             s = torch.randn(
+#                 batch_size,
+#                 self.hidden_size,
+#                 device=device,
+#                 dtype=dtype
+#             ) * init_std
         
-        # Process through iterations
-        states_iters = []
-        for i in range(num_iterations):
-            # Pre-norm for cross-attention
-            s_norm = self.norm1(s)
+#         # Process through iterations
+#         states_iters = []
+#         for i in range(num_iterations):
+#             # Pre-norm for cross-attention
+#             s_norm = self.norm1(s)
             
-            # Cross attention - context is now [batch_size, seq_len, hidden_size]
-            q = self.query(s_norm).unsqueeze(1)  # [batch_size, 1, hidden_size]
-            k = self.key(context)                 # [batch_size, seq_len, hidden_size]
-            v = self.value(context)               # [batch_size, seq_len, hidden_size]
+#             # Cross attention - context is now [batch_size, seq_len, hidden_size]
+#             q = self.query(s_norm).unsqueeze(1)  # [batch_size, 1, hidden_size]
+#             k = self.key(context)                 # [batch_size, seq_len, hidden_size]
+#             v = self.value(context)               # [batch_size, seq_len, hidden_size]
             
-            # Attention scores: q @ k^T
-            scores = torch.matmul(q, k.transpose(-2, -1)) / np.sqrt(self.hidden_size)  # [batch_size, 1, seq_len]
-            attn_weights = F.softmax(scores, dim=-1)
+#             # Attention scores: q @ k^T
+#             scores = torch.matmul(q, k.transpose(-2, -1)) / np.sqrt(self.hidden_size)  # [batch_size, 1, seq_len]
+#             attn_weights = F.softmax(scores, dim=-1)
             
-            # Apply attention to get attended context
-            context_attended = torch.matmul(attn_weights, v).squeeze(1)  # [batch_size, hidden_size]
+#             # Apply attention to get attended context
+#             context_attended = torch.matmul(attn_weights, v).squeeze(1)  # [batch_size, hidden_size]
             
-            # Residual connection after cross-attention
-            s = s + context_attended
+#             # Residual connection after cross-attention
+#             s = s + context_attended
             
-            # Pre-norm for MLP
-            s_norm = self.norm2(s)
+#             # Pre-norm for MLP
+#             s_norm = self.norm2(s)
             
-            # MLP and residual connection
-            s = s + self.mlp(s_norm)
+#             # MLP and residual connection
+#             s = s + self.mlp(s_norm)
             
-            # Store state for this iteration
-            states_iters.append(s)
+#             # Store state for this iteration
+#             states_iters.append(s)
             
-            # Only keep gradients for the last gradient_steps iterations
-            if i < num_iterations - self.gradient_steps:
-                s = s.detach()
+#             # Only keep gradients for the last gradient_steps iterations
+#             if i < num_iterations - self.gradient_steps:
+#                 s = s.detach()
         
-        # Stack outputs
-        states_iters = torch.stack(states_iters, dim=1)  # [batch_size, num_iterations, hidden_size]
+#         # Stack outputs
+#         states_iters = torch.stack(states_iters, dim=1)  # [batch_size, num_iterations, hidden_size]
         
-        # Project to model's hidden size and final norm
-        prefix = self.state_to_prefix_projection(s)
+#         # Project to model's hidden size and final norm
+#         prefix = self.state_to_prefix_projection(s)
         
-        return states_iters, prefix
+#         return states_iters, prefix
 
 
 
-class PrefixAttentionGammaModel:
+class PrefixAttentionGammaWrapper:
     """Generic wrapper for attention layers that handles prefix injection via monkey patching.
     
     Works with different model architectures by automatically detecting the forward signature.
     """
     
-    def __init__(self, original_attention, layer_idx: int, parent_model):
+    def __init__(self, original_attention, layer_idx: int, num_heads):
         self.original_attention = original_attention
         self.layer_idx = layer_idx
-        self.parent_model = parent_model
+        self.num_heads = num_heads
         self.prefix = None
-        
+        self.gamma = None
         # Store original forward method
         self.original_forward = original_attention.forward
         
@@ -167,9 +168,10 @@ class PrefixAttentionGammaModel:
             # Default to trying Qwen signature first, then GPT-2
             return 'auto'
     
-    def set_prefix(self, prefix: torch.Tensor):
+    def set_prefix(self, prefix: torch.Tensor, gamma: torch.Tensor):
         """Set the prefix for this layer."""
         self.prefix = prefix
+        self.gamma = gamma
         
     def clear_prefix(self):
         """Clear the prefix for this layer."""
@@ -198,39 +200,67 @@ class PrefixAttentionGammaModel:
             else:
                 reference_tensor = output
                 
-            prefix_bias = self.prefix.to(
+            prefix = self.prefix.to(
                 dtype=reference_tensor.dtype, 
                 device=reference_tensor.device
             )
             
-            # Calculate norms for rescaling
-            # Get hidden states (first element of output)
-            hidden_states = reference_tensor
+            # let the hidden states to cross attend the prefix
+            input_hidden_representation = kwargs['hidden_states']
             
-            # Calculate norm for each position: [batch_size, seq_len, 1]
-            hidden_states_norm = torch.norm(hidden_states, dim=-1, keepdim=True).mean()  # [4, 384, 1]
+            # Get the number of heads and head dimension
+            num_heads = self.num_heads  # 14 heads for Q
+            head_dim = input_hidden_representation.shape[-1] // num_heads  # 64
             
-            # Calculate norm of prefix bias: [batch_size, 1, 1]
-            prefix_bias_norm = torch.norm(prefix_bias, dim=-1, keepdim=True).mean()  # [batch_size, 1, 1]
+            # Project Q
+            q = self.original_attention.q_proj(input_hidden_representation)            
+            # Project K,V and check if using GQA
+            k = self.original_attention.k_proj(prefix)
+            v = self.original_attention.v_proj(prefix)
             
-            # Rescale prefix bias to be 0.03 times the mean hidden states norm
-            target_norm = 0.03 * hidden_states_norm  # scalar (mean across all positions)
-            
-            # Calculate scale factor (avoid division by zero)
-            if prefix_bias_norm.item() > 1e-8:
-                scale_factor = target_norm / prefix_bias_norm.item()  # scalar
+            # Check if KV dimensions are smaller than Q (indicating GQA)
+            if k.shape[-1] < q.shape[-1]:
+                # Calculate number of KV heads from output dimension
+                num_kv_heads = k.shape[-1] // head_dim
+                
+                # Reshape K,V to match GQA structure
+                k = k.view(input_hidden_representation.shape[0], -1, num_kv_heads, head_dim)
+                v = v.view(input_hidden_representation.shape[0], -1, num_kv_heads, head_dim)
+                
+                # Expand K,V to match Q heads (each KV head is shared by multiple Q heads)
+                k = k.repeat_interleave(num_heads // num_kv_heads, dim=2).transpose(1, 2)
+                v = v.repeat_interleave(num_heads // num_kv_heads, dim=2).transpose(1, 2)
             else:
-                scale_factor = 0.01
+                # Standard multi-head attention
+                k = k.view(input_hidden_representation.shape[0], -1, num_heads, head_dim).transpose(1, 2)
+                v = v.view(input_hidden_representation.shape[0], -1, num_heads, head_dim).transpose(1, 2)
+
+            q = q.view(input_hidden_representation.shape[0], -1, num_heads, head_dim).transpose(1, 2)
+            # Calculate attention scores
+            attention_scores = torch.matmul(q, k.transpose(-2, -1)) / np.sqrt(head_dim)
+            attention_probs = F.softmax(attention_scores, dim=-1)
+            attention_output = torch.matmul(attention_probs, v)
             
+            # Reshape back to original shape
+            attention_output = attention_output.transpose(1, 2).reshape(input_hidden_representation.shape)
+
+            # Apply o projection
+            if hasattr(self.original_attention, 'o_proj'):
+                # Modern architecture
+                added_output = self.original_attention.o_proj(attention_output)
+            else:
+                # GPT-2 style
+                added_output = self.original_attention.c_proj(attention_output)
+
             # Add prefix bias to output
             # assuming prefix_bias shape: [batch_size, 1, hidden_size]
             # Apply bias directly to output
             if isinstance(output, tuple):
                 # Modify first element (hidden_states) and keep other outputs unchanged
-                output = (output[0] * (1-scale_factor) + prefix_bias * scale_factor,) + output[1:]
+                output = (output[0] * (1-self.gamma) + added_output * self.gamma,) + output[1:]
             else:
                 # Direct tensor output
-                output = output * (1-scale_factor) + prefix_bias * scale_factor
+                output = output * (1-self.gamma) + added_output * self.gamma
         
         return output
     
@@ -257,10 +287,13 @@ class TestTimePrefixAttentionGammaModel(nn.Module):
         self.target_layers = self._get_target_layers()
         print(f"Target layers to apply prefix generation to: {self.target_layers}")
 
+        # gamma for each layer
+        self.gamma = nn.Parameter(torch.zeros(len(self.target_layers)))
+        
         # Create prefix generator(s) for target layers
         if config.shared_weight_for_all_layers:
             # Create one shared generator that all layers will reference
-            shared_generator = PrefixGenerator(config, base_model.config.hidden_size)
+            shared_generator = LoopedTransformerQueryGenerator(config, config.num_prefix_tokens, base_model.config.hidden_size, base_model.config.num_attention_heads)
             self.prefix_generators = nn.ModuleDict({
                 str(layer_idx): shared_generator
                 for layer_idx in self.target_layers
@@ -269,7 +302,7 @@ class TestTimePrefixAttentionGammaModel(nn.Module):
         else:
             # Create individual generators for each layer
             self.prefix_generators = nn.ModuleDict({
-                str(layer_idx): PrefixGenerator(config, base_model.config.hidden_size)
+                str(layer_idx): LoopedTransformerQueryGenerator(config, config.num_prefix_tokens, base_model.config.hidden_size, base_model.config.num_attention_heads)
                 for layer_idx in self.target_layers
             })
             print(f"Using individual prefix generators for {len(self.target_layers)} layers")
@@ -306,7 +339,7 @@ class TestTimePrefixAttentionGammaModel(nn.Module):
             
             # Use generic wrapper for all models
             print(f"Using generic wrapper for layer {layer_idx}")
-            wrapper = GenericPrefixAttentionWrapper(attention_layer, layer_idx, self)
+            wrapper = PrefixAttentionGammaWrapper(attention_layer, layer_idx, self.base_model.config.num_attention_heads)
             self.prefix_wrappers[layer_idx] = wrapper
     
     def _get_attention_layer(self, layer_idx: int):
@@ -448,7 +481,8 @@ class TestTimePrefixAttentionGammaModel(nn.Module):
             
         for i, layer_idx in enumerate(self.target_layers):
             layer_prefix = self.current_prefixes[i]  # [batch, prefix_len, hidden]
-            self.prefix_wrappers[layer_idx].set_prefix(layer_prefix)
+            layer_gamma = self.gamma[i]
+            self.prefix_wrappers[layer_idx].set_prefix(layer_prefix, layer_gamma)
 
     def _clear_layer_prefixes(self):
         """Clear prefixes from all target layers without resetting current_prefixes."""

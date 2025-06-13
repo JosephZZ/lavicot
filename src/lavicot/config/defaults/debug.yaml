@@ -1,6 +1,6 @@
 # Debug configuration for fast testing
-model_name: "Qwen/Qwen2.5-0.5B-Instruct"
-model_type: "lavicot_bias_gamma"  # Options: "lavicot_bias", "lavicot_bias_gamma", "lavicot_prefix_attention"
+model_name: "Qwen/Qwen2.5-3B-Instruct"
+model_type: "lavicot_prefix_attention"  # Options: "lavicot_bias", "lavicot_bias_gamma", "lavicot_prefix_attention"
 base_output_dir: "./lavicot/outputs/debug"
 resume_checkpoint_path: null
 
@@ -8,7 +8,7 @@ resume_checkpoint_path: null
 num_train_epochs: 1
 per_device_train_batch_size: 1
 per_device_eval_batch_size: 2
-gradient_accumulation_steps: 1
+gradient_accumulation_steps: 2
 learning_rate: 1e-4
 max_length: 512  # Minimal sequence length
 max_grad_norm: 1.0
@@ -41,10 +41,14 @@ proportion_max: 0.7
 
 # Prefix generator configuration - minimal for speed
 prefix_generator:
-  layer_selection_mode: "specific"
+  num_prefix_tokens: 8
+  num_blocks: 1
+  dropout: 0.01
+  use_learnable_queries: true
+  layer_selection_mode: "all"
   layer_selection: [0, 1]  # Just first 2 layers for maximum speed
-  max_iterations: 2  # Minimal iterations for speed
-  gradient_steps: 1  # Minimal gradient steps
+  max_iterations: 3  # Minimal iterations for speed
+  gradient_steps: 2  # Minimal gradient steps
   shared_weight_for_all_layers: true  # Share weights for faster training
   use_hooks_during_prefix_update: false
 
